@@ -296,6 +296,41 @@ class StepExecutor:
             return None
         return str(body.get("result") or "사용 한도에 걸렸다 (HTTP 429)")
 
+    # 검사 출력에서 다음 시도에 실어 보낼 분량. 실패 원인은 대개 끝에 있다.
+    CHECK_TAIL_LINES = 40
+
+    def _check_failure(self) -> Optional[str]:
+        """검사를 돌려 통과하면 None, 실패하면 다음 시도에 넘길 에러 문장을 돌려준다.
+
+        명령은 Stop 훅(scripts/hooks/stop-check.sh)과 같다: HARNESS_CHECK_CMD가 있으면 그것,
+        없으면 scripts/check.sh. 둘 다 없으면 확인할 수단이 없으므로 경고만 하고 통과시킨다.
+        """
+        cmd = os.environ.get("HARNESS_CHECK_CMD")
+        if cmd:
+            argv, shown = ["bash", "-c", cmd], cmd
+        elif (Path(self._root) / "scripts" / "check.sh").is_file():
+            argv, shown = ["bash", "scripts/check.sh"], "scripts/check.sh"
+        else:
+            print("  WARN: scripts/check.sh가 없어 completed를 확인하지 못했다 — 세션의 신고를 그대로 믿는다")
+            return None
+
+        try:
+            r = subprocess.run(argv, cwd=self._root, capture_output=True, text=True, timeout=1800)
+            code, out = r.returncode, (r.stdout or "") + (r.stderr or "")
+        except subprocess.TimeoutExpired:
+            code, out = "timeout", "검사가 30분 안에 끝나지 않았다"
+        if code == 0:
+            return None
+
+        tail = "\n".join(out.strip().splitlines()[-self.CHECK_TAIL_LINES:])
+        return (
+            f"세션이 status를 completed로 적었지만 `{shown}`가 실패했다 (exit {code}). "
+            "completed는 이 검사가 통과한 뒤에만 인정된다. 아래 출력의 원인을 고치고, "
+            "검사가 통과하는 것을 직접 확인한 뒤 completed를 적어라. 이 step이 고칠 수 없는 "
+            "원인이면 completed 대신 blocked와 blocked_reason을 적어라.\n"
+            f"--- 검사 출력의 끝 ---\n{tail}"
+        )
+
     def _invoke_claude(self, step: dict, preamble: str) -> dict:
         step_num, step_name = step["step"], step["name"]
         step_file = self._phase_dir / f"step{step_num}.md"
@@ -408,14 +443,20 @@ class StepExecutor:
             status = next((s.get("status", "pending") for s in index["steps"] if s["step"] == step_num), "pending")
             ts = self._stamp()
 
+            # completed는 세션의 자기 신고다. 검사를 여기서 직접 돌려 확인한 뒤에만 인정한다 —
+            # Stop 훅은 세 번 되돌린 뒤 놓아주므로, 세션이 빨간 검사 위에 completed를 적고
+            # 끝날 수 있다(시험용 phase smoke-harness에서 실제로 그렇게 기록됐다).
+            check_failure = None
             if status == "completed":
-                for s in index["steps"]:
-                    if s["step"] == step_num:
-                        s["completed_at"] = ts
-                self._write_json(self._index_file, index)
-                self._commit_step(step_num, step_name)
-                print(f"  ✓ Step {step_num}: {step_name} [{elapsed}s]")
-                return True
+                check_failure = self._check_failure()
+                if check_failure is None:
+                    for s in index["steps"]:
+                        if s["step"] == step_num:
+                            s["completed_at"] = ts
+                    self._write_json(self._index_file, index)
+                    self._commit_step(step_num, step_name)
+                    print(f"  ✓ Step {step_num}: {step_name} [{elapsed}s]")
+                    return True
 
             if status == "blocked":
                 for s in index["steps"]:
@@ -432,6 +473,8 @@ class StepExecutor:
                 (s.get("error_message", "Step did not update status") for s in index["steps"] if s["step"] == step_num),
                 "Step did not update status",
             )
+            if check_failure is not None:
+                err_msg = check_failure
             if err_msg == "Step did not update status":
                 # 세션이 status를 안 건드리고 끝난 것 — 다음 시도가 같은 함정을 밟지 않게
                 # 흔한 원인과 처방을 에러에 실어 보낸다(Epic 5 step 17: e2e를 백그라운드로

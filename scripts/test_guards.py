@@ -23,6 +23,7 @@ def test_shell_tests_are_collected():
         "stop-check.test.sh",
         "harness-run.test.sh",
         "harness-pr.test.sh",
+        "execute-smoke.test.sh",
     } <= names
 
 

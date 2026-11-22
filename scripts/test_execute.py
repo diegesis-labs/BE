@@ -757,3 +757,106 @@ class TestManualGate:
 
         assert json.loads(executor._index_file.read_text())["completed_at"] == first
         assert [c for c in calls if c[0] == "commit"] == []
+
+
+# ---------------------------------------------------------------------------
+# completed는 검사가 통과해야 인정된다
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _no_inherited_check_cmd(monkeypatch):
+    """바깥 환경의 HARNESS_CHECK_CMD가 새어 들어와 다른 테스트의 결과를 바꾸지 않게 한다."""
+    monkeypatch.delenv("HARNESS_CHECK_CMD", raising=False)
+
+
+class TestCheckFailure:
+    def test_passing_check_returns_none(self, executor, monkeypatch):
+        monkeypatch.setenv("HARNESS_CHECK_CMD", "true")
+        assert executor._check_failure() is None
+
+    def test_failing_check_reports_exit_code_and_output_tail(self, executor, monkeypatch):
+        monkeypatch.setenv("HARNESS_CHECK_CMD", "echo 'pytest: 2 failed'; exit 7")
+        msg = executor._check_failure()
+        assert msg is not None
+        assert "exit 7" in msg
+        assert "pytest: 2 failed" in msg
+
+    def test_uses_check_script_when_no_env(self, executor, tmp_project):
+        scripts = tmp_project / "scripts"
+        scripts.mkdir()
+        (scripts / "check.sh").write_text("echo from-check-sh; exit 1\n")
+        msg = executor._check_failure()
+        assert msg is not None and "from-check-sh" in msg
+
+    def test_no_check_available_passes_with_warning(self, executor, capsys):
+        assert executor._check_failure() is None
+        assert "확인하지 못했다" in capsys.readouterr().out
+
+
+class TestCompletedNeedsGreenCheck:
+    """세션이 빨간 검사 위에 completed를 적는 경우를 재현한다."""
+
+    STEP = {"step": 2, "name": "ui"}
+
+    def _session_claims_completed(self, executor, calls):
+        def fake(step, preamble):
+            calls.append(preamble)
+            index = json.loads(executor._index_file.read_text())
+            for s in index["steps"]:
+                if s["step"] == step["step"]:
+                    s["status"] = "completed"
+                    s["summary"] = "다 됐다고 신고한다"
+            executor._index_file.write_text(json.dumps(index))
+            return {}
+        return fake
+
+    def _status(self, executor):
+        index = json.loads(executor._index_file.read_text())
+        return next(s for s in index["steps"] if s["step"] == 2)
+
+    def test_red_check_is_retried_then_recorded_as_error(self, executor, monkeypatch):
+        monkeypatch.setenv("HARNESS_CHECK_CMD", "echo RED-MARKER; exit 1")
+        calls = []
+        with patch.object(executor, "_invoke_claude", self._session_claims_completed(executor, calls)), \
+             patch.object(executor, "_commit_step") as commit, \
+             patch.object(executor, "_update_top_index") as top:
+            with pytest.raises(SystemExit) as exc:
+                executor._execute_single_step(self.STEP, "guardrails")
+
+        assert exc.value.code == 1
+        assert len(calls) == executor.MAX_RETRIES
+        step = self._status(executor)
+        assert step["status"] == "error"
+        assert "completed_at" not in step
+        assert "RED-MARKER" in step["error_message"]
+        top.assert_called_once_with("error")
+        # 다음 시도는 검사가 왜 빨간지 받아야 한다
+        assert "RED-MARKER" in calls[1]
+        assert commit.call_count == 1  # 실패 기록의 커밋뿐이다
+
+    def test_green_check_is_accepted(self, executor, monkeypatch):
+        monkeypatch.setenv("HARNESS_CHECK_CMD", "true")
+        calls = []
+        with patch.object(executor, "_invoke_claude", self._session_claims_completed(executor, calls)), \
+             patch.object(executor, "_commit_step"):
+            assert executor._execute_single_step(self.STEP, "guardrails") is True
+
+        assert len(calls) == 1
+        step = self._status(executor)
+        assert step["status"] == "completed" and "completed_at" in step
+
+    def test_check_that_turns_green_on_retry_is_accepted(self, executor, monkeypatch, tmp_project):
+        flag = tmp_project / "fixed"
+        monkeypatch.setenv("HARNESS_CHECK_CMD", f"test -f {flag}")
+        calls = []
+        claim = self._session_claims_completed(executor, calls)
+
+        def fake(step, preamble):
+            if calls:  # 두 번째 시도에서 고친다
+                flag.write_text("")
+            return claim(step, preamble)
+
+        with patch.object(executor, "_invoke_claude", fake), patch.object(executor, "_commit_step"):
+            assert executor._execute_single_step(self.STEP, "guardrails") is True
+        assert len(calls) == 2
+        assert self._status(executor)["status"] == "completed"

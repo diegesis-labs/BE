@@ -102,9 +102,11 @@ scripts/harness-worktree.sh {task-name}    # 표준 출력의 마지막 줄이 w
 
 | 전이 | 기록되는 필드 | 기록 주체 |
 |------|-------------|----------|
-| → `completed` | `completed_at`, `summary` | Claude 세션 (summary), execute.py (timestamp) |
+| → `completed` | `completed_at`, `summary` | Claude 세션 (summary), execute.py (timestamp, 검사 통과를 확인한 뒤) |
 | → `error` | `failed_at`, `error_message` | Claude 세션 (message), execute.py (timestamp) |
 | → `blocked` | `blocked_at`, `blocked_reason` | Claude 세션 (reason), execute.py (timestamp) |
+
+**`completed`는 세션의 신고만으로 인정되지 않는다.** 세션이 `completed`를 적으면 execute.py가 `scripts/check.sh`를 직접 돌린다. 실패하면 step을 `pending`으로 되돌리고 검사 출력을 실어 재시도하며, 3회 뒤에도 빨가면 `error`로 끝낸다. Stop 훅은 세 번 되돌린 뒤 세션을 놓아주므로, 이 확인이 없으면 빨간 검사 위의 `completed`가 그대로 기록된다. step이 고칠 수 없는 원인으로 검사가 빨가면 세션은 `completed`가 아니라 `blocked`를 적어야 한다.
 
 `summary`는 step 완료 시 산출물을 한 줄로 요약한 것으로, execute.py가 다음 step 프롬프트에 컨텍스트로 누적 전달한다. 따라서 다음 step에 유용한 정보(생성된 파일, 핵심 결정 등)를 담아야 한다.
 
