@@ -175,6 +175,6 @@ harness가 만드는 커밋은 범위에 phase의 이름을 쓰며, 그 형식�
 
 PR을 합칠 때에는 **merge commit** 방식을 씁니다. squash 방식은 쓰지 않습니다. squash는 브랜치의 커밋들을 하나로 뭉치므로, 테스트를 먼저 썼다는 증거인 RED 커밋이 `main`의 이력에서 사라지기 때문입니다.
 
-`main` 브랜치의 보호 규칙과 PR을 합치기 전에 필요한 승인 인원은 아직 정하지 않았으며, [DECISIONS.md](DECISIONS.md)의 팀과 합의할 항목에 올려 두었습니다.
+`main`에는 직접 push하지 않습니다. 이 레포는 백엔드 담당자 혼자 관리하므로, PR을 합치기 전에 다른 사람의 승인을 받아야 한다는 조건은 두지 않습니다([DECISIONS.md](DECISIONS.md)의 D-35).
 
 PR의 본문에는 무엇을 만들었는지, 어떤 검사를 통과했는지, 사람이 무엇을 직접 확인했는지를 적습니다. harness로 돌린 phase의 PR은 `scripts/harness-pr.sh`가 본문을 만들어 줍니다.

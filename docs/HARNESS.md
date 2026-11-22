@@ -201,6 +201,6 @@ HARNESS_MODEL=claude-sonnet-5-5 scripts/harness-run.sh 3-books
 | Epic 문서와 테스트 케이스의 형식, Story를 step으로 옮기는 규칙 | [backlog/README.md](backlog/README.md) |
 | 검사 명령, 테스트 규칙, 커밋과 브랜치와 PR의 규칙 | [DEVELOPMENT.md](DEVELOPMENT.md) |
 | 가드의 정확한 규칙 | `scripts/hooks/`의 각 스크립트 |
-| 이 절차를 정한 결정과 이유 | [DECISIONS.md](DECISIONS.md)의 D-26부터 D-34까지 |
+| 이 절차를 정한 결정과 이유 | [DECISIONS.md](DECISIONS.md)의 D-26부터 D-35까지 |
 
 `.claude/` 아래의 파일은 에이전트가 읽는 지시문이어서, 문서 작성 규칙의 문체를 따르지 않고 짧은 명령문으로 씁니다.
