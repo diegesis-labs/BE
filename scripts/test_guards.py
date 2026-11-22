@@ -21,6 +21,7 @@ def test_shell_tests_are_collected():
         "tdd-guard.test.sh",
         "stop-check.test.sh",
         "harness-run.test.sh",
+        "harness-pr.test.sh",
     } <= names
 
 
