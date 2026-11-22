@@ -4,6 +4,7 @@
 새 `*.test.sh`를 `scripts/` 아래에 두면 자동으로 포함된다.
 """
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -27,5 +28,17 @@ def test_shell_tests_are_collected():
 
 @pytest.mark.parametrize("script", SHELL_TESTS, ids=lambda p: p.name)
 def test_shell_test_passes(script: Path):
-    result = subprocess.run(["bash", str(script)], capture_output=True, text=True, timeout=300)
+    # 무인 세션의 변수를 일부러 흘려 넣는다. 셸 테스트는 이 변수들을 스스로 지워야 한다.
+    # 지우지 않으면 무인 세션 안에서만 검사가 빨개져, 모든 step이 이유 없이 되돌려진다.
+    env = os.environ | {
+        "HARNESS_RUN": "1",
+        "HARNESS_REVIEW": "1",
+        "HARNESS_FIX": "1",
+        "HARNESS_MODEL": "leaked-model",
+        "HARNESS_MAX_REVIEW_ROUNDS": "9",
+        "HARNESS_CHECK_CMD": "exit 1",
+    }
+    result = subprocess.run(
+        ["bash", str(script)], capture_output=True, text=True, timeout=300, env=env
+    )
     assert result.returncode == 0, result.stdout[-4000:] + result.stderr[-2000:]

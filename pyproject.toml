@@ -13,7 +13,9 @@ target-version = "py314"
 line-length = 100
 # 아래 두 파일은 OnlineFourCut의 원본을 거의 그대로 옮긴 것이다.
 # 원본과의 차이를 추적할 수 있도록 서식과 린트를 맞추지 않는다. pyright와 pytest는 그대로 건다.
-extend-exclude = ["scripts/execute.py", "scripts/test_execute.py"]
+# phases/ 아래는 step 지시와 리뷰 기록이다. 그 안의 코드 블록은 서식을 맞출 코드가 아니고,
+# 리뷰가 틀린 구현의 예를 한 줄로 적으면 그것만으로 검사가 빨개진다.
+extend-exclude = ["scripts/execute.py", "scripts/test_execute.py", "phases"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]

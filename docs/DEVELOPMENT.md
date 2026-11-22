@@ -30,6 +30,8 @@ Python의 버전은 `.python-version`에, 도구의 버전은 `pyproject.toml`�
 | 3 | `uv run pyright` | 타입 오류 |
 | 4 | `uv run pytest` | 테스트 |
 
+ruff는 `phases/` 아래를 검사하지 않습니다. 그곳의 파일은 step 지시와 리뷰 기록이며, 그 안의 코드 블록은 서식을 맞춰야 하는 코드가 아니기 때문입니다.
+
 ```bash
 scripts/check.sh         # 첫 실패에서 멈춥니다. 커밋하기 전에 돌립니다.
 scripts/check.sh --all   # 네 가지를 모두 돌리고 명령별 결과를 요약합니다.

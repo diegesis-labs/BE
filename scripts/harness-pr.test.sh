@@ -6,6 +6,10 @@
 # 드라이런이 새면 사람이 승인하기 전에 push와 PR이 나간다. 둘 다 되돌려도 흔적이 남는다.
 set -u
 
+# 이 테스트가 무인 세션 안에서 돌면 그 세션의 HARNESS_* 변수를 물려받는다. 그러면 가드가
+# "헤드리스다"로 판정해 테스트의 기대와 어긋난다. 필요한 변수는 경우마다 직접 넣는다.
+unset HARNESS_RUN HARNESS_REVIEW HARNESS_FIX HARNESS_MODEL HARNESS_MAX_REVIEW_ROUNDS HARNESS_CHECK_CMD
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PASS=0
 FAIL=0

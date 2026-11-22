@@ -9,6 +9,10 @@
 # 리뷰가 붙거나(오판), 끝난 phase가 리뷰 없이 지나간다(누락).
 set -u
 
+# 이 테스트가 무인 세션 안에서 돌면 그 세션의 HARNESS_* 변수를 물려받는다. 그러면 가드가
+# "헤드리스다"로 판정해 테스트의 기대와 어긋난다. 필요한 변수는 경우마다 직접 넣는다.
+unset HARNESS_RUN HARNESS_REVIEW HARNESS_FIX HARNESS_MODEL HARNESS_MAX_REVIEW_ROUNDS HARNESS_CHECK_CMD
+
 HARNESS_RUN_LIB=1 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/harness-run.sh"
 
 TMP=$(mktemp -d)
