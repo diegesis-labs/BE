@@ -193,7 +193,7 @@ if reviews:
                 break
             inside = line.strip() == "## 종합 판정"
             continue
-        if inside:
+        if inside and not line.startswith("<!--"):
             section.append(line)
     out += [line for line in "\n".join(section).strip().splitlines()] or ["(종합 판정 절을 찾지 못했습니다)"]
     out.append("")

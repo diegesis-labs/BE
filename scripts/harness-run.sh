@@ -167,7 +167,7 @@ review_dir="$ROOT/phases/$task/review"
 mkdir -p "$review_dir"
 log="$review_dir/session.log"
 model="${HARNESS_MODEL:-claude-opus-5-5}"
-echo "harness-run: $task step 전원 completed (execute.py 종료 코드 $code) — 리뷰 세션을 띄운다"
+echo "harness-run: $task step 전원 completed (execute.py 종료 코드 $code) — 리뷰 단계로 간다"
 echo "harness-run: 세션 로그 → $log"
 
 # 슬래시 커맨드 대신 스킬 호출 문장을 직접 넘긴다. 헤드리스 모드의 커스텀 커맨드
