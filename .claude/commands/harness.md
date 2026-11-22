@@ -238,6 +238,8 @@ scripts/harness-run.sh {task-name} --no-fix   # 리뷰까지만. 처분은 /revi
 
 **리뷰 처분.** 리포트에 결함이 있으면 또 다른 별도 세션이 `review-fix` 스킬로 처분한다. 결함마다 타당한지 대조하고, 재현 테스트를 먼저 쓴 뒤 고치고, `phases/{task-name}/review/fix-{N}.md`에 처분을 기록한다. 그 라운드에 critical이나 major가 있었으면 고친 결과를 확인하려고 다시 리뷰한다. 이 왕복은 최대 `HARNESS_MAX_REVIEW_ROUNDS`(기본 3) 라운드다. minor만 있던 라운드는 처분으로 닫고 다시 리뷰하지 않는다.
 
+같은 명령을 다시 돌려도(예: MANUAL.md를 체크한 뒤) 마지막 리뷰가 닫혀 있고 그 뒤로 `phases/` 밖의 코드가 바뀌지 않았으면 리뷰를 다시 띄우지 않는다. 코드가 바뀌었으면 다시 리뷰한다.
+
 리뷰와 처분의 결과는 각 파일 끝의 한 줄로 읽는다. 이 줄이 없으면 harness-run.sh는 추정하지 않고 멈춘다.
 
 ```

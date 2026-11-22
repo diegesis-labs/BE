@@ -208,9 +208,46 @@ tree_dirty() {
   [ -n "$(git -C "$ROOT" status --porcelain)" ]
 }
 
+# 마지막 리뷰가 닫혀 있고 그 뒤로 코드가 바뀌지 않았으면 다시 리뷰하지 않는다.
+# 사람이 MANUAL.md를 체크하고 같은 명령을 다시 돌리는 것이 정상 흐름인데(종료 코드 5),
+# 그때마다 리뷰 세션을 새로 띄우면 같은 코드를 또 판정하느라 시간과 비용만 쓴다.
+# phases/ 아래의 변경(MANUAL 체크, 처분 기록의 숫자 정정)은 코드가 아니므로 세지 않는다.
+review_is_current() {
+  local n report c m mi ref
+  n="$(latest_round "$ROOT" "$task")"
+  [ "$n" -gt 0 ] || return 1
+  report="$review_dir/review-$n.md"
+  c="$(read_marker "$report" verdict critical)" || return 1
+  m="$(read_marker "$report" verdict major)" || return 1
+  mi="$(read_marker "$report" verdict minor)" || return 1
+  [ $((c + m)) -eq 0 ] || return 1
+  if [ "$mi" -gt 0 ]; then
+    [ -f "$review_dir/fix-$n.md" ] || return 1
+  fi
+  ref="$(git -C "$ROOT" log -1 --format=%H -- "phases/$task/review")"
+  [ -n "$ref" ] || return 1
+  [ -z "$(git -C "$ROOT" status --porcelain -- . ':(exclude)phases')" ] || return 1
+  git -C "$ROOT" diff --quiet "$ref" HEAD -- . ':(exclude)phases'
+}
+
+# 모든 처분 기록에 남은 "사람 판단 필요"의 합. 사람이 정한 뒤 disposition 줄의 숫자를 고치면 줄어든다.
+pending_human() {
+  local f v total=0
+  for f in "$review_dir"/fix-*.md; do
+    [ -e "$f" ] || continue
+    v="$(read_marker "$f" disposition needs-human)" || continue
+    total=$((total + v))
+  done
+  echo "$total"
+}
+
 round=0
-needs_human_total=0
 while :; do
+  if review_is_current; then
+    echo "harness-run: 마지막 리뷰가 닫혀 있고 그 뒤로 코드가 바뀌지 않았다 — 다시 리뷰하지 않는다."
+    break
+  fi
+
   round=$((round + 1))
   before="$(latest_round "$ROOT" "$task")"
 
@@ -264,9 +301,8 @@ while :; do
     needs_human "처분 세션이 커밋하지 않은 변경을 남겼다 — \`git status\`로 보고 정리해라."
   fi
 
-  unresolved="$(read_marker "$fix_file" disposition needs-human)" ||
+  read_marker "$fix_file" disposition needs-human >/dev/null ||
     needs_human "fix-$n.md 끝에 disposition 줄이 없어 처분 결과를 읽을 수 없다."
-  needs_human_total=$((needs_human_total + unresolved))
 
   # minor만 있던 라운드는 처분으로 닫는다. 다시 리뷰하지 않는다.
   if [ $((critical + major)) -eq 0 ]; then
@@ -279,8 +315,9 @@ while :; do
   echo "harness-run: critical·major를 처분했다 — 다시 리뷰한다."
 done
 
-if [ "$needs_human_total" -gt 0 ]; then
-  needs_human "처분이 사람의 판단으로 넘긴 항목이 ${needs_human_total}건 있다."
+waiting="$(pending_human)"
+if [ "$waiting" -gt 0 ]; then
+  needs_human "처분이 사람의 판단으로 넘긴 항목이 ${waiting}건 남았다. 정한 뒤 그 항목을 '고쳤다'나 '기각했다'로 옮기고 disposition 줄의 숫자를 고쳐라."
 fi
 
 echo "harness-run: 리뷰와 처분이 닫혔다 (execute.py 종료 코드 $code)."

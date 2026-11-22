@@ -303,6 +303,50 @@ echo uncommitted >"$SCENARIO/fix_mode"
 run_loop "$WT"
 check "처분 기록만 안 커밋했으면 대신 커밋하고 통과" "0:" "$RC:$(git -C "$WT" status --porcelain)"
 
+echo "다시 돌릴 때"
+WT="$(make_repo rerun 0)"
+scenario rerun "0 2 1" "0 0 0"
+run_loop "$WT"
+: >"$SCENARIO/calls"
+run_loop "$WT"
+check "닫힌 리뷰 뒤로 코드가 그대로면 다시 리뷰하지 않는다" "0:" "$RC:$(calls)"
+(cd "$WT" && echo "- [x] 봤다" >phases/demo/MANUAL.md && git add -A && git -c user.name=t -c user.email=t@t commit --quiet -m "docs(demo): MANUAL")
+run_loop "$WT"
+check "phases/ 아래만 바뀌었으면 다시 리뷰하지 않는다" "0:" "$RC:$(calls)"
+(cd "$WT" && echo "새 코드" >>code.txt && git add -A && git -c user.name=t -c user.email=t@t commit --quiet -m "feat: 변경")
+run_loop "$WT"
+check "코드가 바뀌었으면 다시 리뷰한다" "0:review" "$RC:$(calls)"
+: >"$SCENARIO/calls"
+(cd "$WT" && echo "커밋 안 한 변경" >>code.txt)
+run_loop "$WT"
+check "커밋하지 않은 코드 변경이 있어도 다시 리뷰한다" "review" "$(calls)"
+
+WT="$(make_repo rerun-minor 0)"
+scenario rerun-minor "0 0 2"
+run_loop "$WT"
+: >"$SCENARIO/calls"
+run_loop "$WT"
+check "minor를 처분한 라운드도 닫힌 것으로 본다" "0:" "$RC:$(calls)"
+
+WT="$(make_repo rerun-open 0)"
+scenario rerun-open "0 1 0"
+HARNESS_MAX_REVIEW_ROUNDS=1 run_loop "$WT"
+: >"$SCENARIO/calls"
+HARNESS_MAX_REVIEW_ROUNDS=1 run_loop "$WT"
+check "major가 남은 리뷰는 닫힌 것이 아니다 — 다시 리뷰한다" "6:review fix" "$RC:$(calls)"
+
+WT="$(make_repo rerun-human 0)"
+scenario rerun-human "0 0 2"
+echo 1 >"$SCENARIO/needs_human"
+run_loop "$WT"
+: >"$SCENARIO/calls"
+run_loop "$WT"
+check "사람 판단 필요가 남은 채 다시 돌리면 리뷰 없이 6" "6:" "$RC:$(calls)"
+(cd "$WT" && sed -i.bak 's/needs-human=1/needs-human=0/' phases/demo/review/fix-1.md && rm phases/demo/review/fix-1.md.bak &&
+  git add -A && git -c user.name=t -c user.email=t@t commit --quiet -m "docs(demo): 사람이 정했다")
+run_loop "$WT"
+check "사람이 정하고 숫자를 고치면 통과한다" "0:" "$RC:$(calls)"
+
 echo "세션 환경"
 WT="$(make_repo env 0)"
 scenario env "0 1 0" "0 0 0"
