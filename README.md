@@ -4,7 +4,16 @@ Diegesis는 소설의 분위기에 맞는 음악을 재생해 주는 전자책 �
 
 ## 현재 상태
 
-지금은 1차 마일스톤(MVP)을 위한 설계 문서와 폴더 구조만 있으며, 소스코드는 아직 작성하지 않았습니다. 따라서 서버를 실행하는 방법은 구현이 시작된 뒤에 이 문서에 추가합니다.
+지금은 1차 마일스톤(MVP)을 위한 설계 문서, 폴더 구조, 그리고 개발 도구와 작업 절차가 준비되어 있습니다. 서버의 소스코드는 아직 작성하지 않았습니다. 따라서 서버를 실행하는 방법은 구현이 시작된 뒤에 이 문서에 추가합니다.
+
+## 개발 환경
+
+```bash
+uv sync             # Python과 개발 도구를 설치합니다.
+scripts/check.sh    # 린트, 서식, 타입, 테스트를 검사합니다.
+```
+
+코드를 쓸 때 지키는 규칙은 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)에, 에이전트에게 구현을 맡기는 절차는 [docs/HARNESS.md](docs/HARNESS.md)에 있습니다.
 
 ## 백엔드가 하는 일
 
@@ -30,6 +39,9 @@ Python, FastAPI, PostgreSQL(pgvector), Docker를 씁니다. 각 기술을 고른
 | [docs/INFRA.md](docs/INFRA.md) | 배포 환경에 관해 정해진 것과 정해야 할 것 |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | 제품의 범위와 운영에 관한 결정 |
 | [docs/GLOSSARY.md](docs/GLOSSARY.md) | 문서에 나오는 용어의 뜻 |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | 개발 환경, 검사 명령, 테스트와 커밋의 규칙 |
+| [docs/HARNESS.md](docs/HARNESS.md) | 에이전트에게 구현을 맡기는 절차 |
+| [docs/backlog/README.md](docs/backlog/README.md) | 구현할 일의 목록 |
 
 ## 폴더 구조
 
@@ -37,8 +49,10 @@ Python, FastAPI, PostgreSQL(pgvector), Docker를 씁니다. 각 기술을 고른
 app/            # 서버 코드. 기능별로 폴더를 나눈다.
 migrations/     # 데이터베이스 구조 변경 이력
 tests/          # 테스트
-scripts/        # 개발용 스크립트
+scripts/        # 검사 스크립트와 harness
 docs/           # 문서
+phases/         # harness가 실행한 작업의 기록
+.claude/        # Claude Code의 설정, 명령, 스킬
 ```
 
 각 폴더의 역할은 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#8-코드-구조)에 자세히 적혀 있습니다.
