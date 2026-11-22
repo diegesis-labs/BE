@@ -24,3 +24,9 @@ docs/notion-exports
 .idea/
 .vscode/
 .DS_Store
+
+# harness 실행 산출물 (docs/HARNESS.md)
+phases/**/step*-output.json
+phases/**/review/session.log
+.claude/worktrees/
+.claude/settings.local.json
