@@ -1,0 +1,26 @@
+# 비밀값
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.pyright/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# 로컬 데이터 (음원 파일, 산출물 묶음, 팀노션 export 파일)
+var/
+docs/notion-exports
+
+# 편집기와 운영체제
+.idea/
+.vscode/
+.DS_Store
