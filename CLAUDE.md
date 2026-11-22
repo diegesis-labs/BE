@@ -15,5 +15,8 @@
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | 설정값의 이름, 뜻, 기본값, 다루는 규칙 | 설정값을 추가하거나 읽는 코드를 작성할 때 |
 | [docs/INFRA.md](docs/INFRA.md) | 배포 환경에 관해 정해진 것과 정해야 할 것 | 배포와 관련된 작업을 할 때 |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | 제품의 범위와 운영에 관한 결정, 문서 작성 규칙, 팀과 합의할 항목 | 문서를 작성할 때, 범위가 애매할 때 |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | 개발 환경, 검사 명령, 반드시 지킬 규칙의 색인, 테스트 규칙, 커밋과 브랜치와 PR의 규칙 | 코드를 쓰거나 커밋하기 전에 |
+| [docs/HARNESS.md](docs/HARNESS.md) | 에이전트에게 구현을 맡기는 절차, 파일이 놓이는 곳, 환경 변수와 의존 | 작업을 시작하거나 harness를 돌릴 때 |
+| [docs/backlog/README.md](docs/backlog/README.md) | Epic 목록, Epic 문서와 테스트 케이스의 형식 | 무엇을 구현할지 정하거나 Epic 문서를 쓸 때 |
 
 `docs/notion-exports/`는 팀 노션에서 내보낸 회의록과 리서치 원본을 모아 둔 참고 자료이며, 결정의 기준으로 쓰지 않는다. 이 폴더는 git에 올리지 않으므로 각자의 로컬에만 있다.
