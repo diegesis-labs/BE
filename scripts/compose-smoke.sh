@@ -97,8 +97,12 @@ acquire_lock() {
     fail "다른 스모크가 방금 잠금(${LOCK_DIR})을 넘겨받았다. 그것이 끝난 뒤 다시 실행해라"
   fi
   echo "=== 끝난 스모크(PID ${holder})가 남긴 잠금을 넘겨받는다"
-  rm -f "$LOCK_DIR/pid"
-  rmdir "$LOCK_DIR" 2>/dev/null || true
+  # 여기서부터 실패하면 넘겨받기 잠금을 풀고 멈춘다. 쥔 채 멈추면 뒤의 스모크가 모두 멈춘다.
+  rm -f "$LOCK_DIR/pid" 2>/dev/null || true
+  if ! rmdir "$LOCK_DIR" 2>/dev/null; then
+    rmdir "$TAKEOVER_DIR" 2>/dev/null || true
+    fail "끝난 스모크가 남긴 잠금(${LOCK_DIR})을 지우지 못했다(권한이 없거나 다른 파일이 있다). 도는 스모크가 없는지 확인한 뒤 그 폴더를 지우고 다시 실행해라"
+  fi
   if ! mkdir "$LOCK_DIR" 2>/dev/null; then
     rmdir "$TAKEOVER_DIR" 2>/dev/null || true
     fail "다른 스모크가 방금 잠금(${LOCK_DIR})을 얻었다. 그것이 끝난 뒤 다시 실행해라"
