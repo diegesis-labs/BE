@@ -70,12 +70,16 @@ def build_app() -> FastAPI:
         raise AppError(409, "BOOK_VERSION_CONFLICT", "이미 같은 버전의 책이 있습니다.")
 
     @app.get("/test/fastapi-http/{status_code}")
-    def raise_fastapi_http(status_code: int) -> dict[str, str]:
-        raise HTTPException(status_code=status_code, detail=RAW_HTTP_DETAIL)
+    def raise_fastapi_http(status_code: int, etag: str | None = None) -> dict[str, str]:
+        headers = {"ETag": etag} if etag else None
+        raise HTTPException(status_code=status_code, detail=RAW_HTTP_DETAIL, headers=headers)
 
     @app.get("/test/starlette-http/{status_code}")
-    def raise_starlette_http(status_code: int) -> dict[str, str]:
-        raise StarletteHTTPException(status_code=status_code, detail=RAW_HTTP_DETAIL)
+    def raise_starlette_http(status_code: int, etag: str | None = None) -> dict[str, str]:
+        headers = {"ETag": etag} if etag else None
+        raise StarletteHTTPException(
+            status_code=status_code, detail=RAW_HTTP_DETAIL, headers=headers
+        )
 
     return app
 
@@ -256,20 +260,35 @@ def test_http_exception_is_converted_to_error_format(
     assert RAW_HTTP_DETAIL not in response.text
 
 
+def error_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    """에러 처리기의 로거가 남긴 ERROR 이상의 기록."""
+    return [
+        record
+        for record in caplog.records
+        if record.name == "app.core.errors" and record.levelno >= logging.ERROR
+    ]
+
+
 @pytest.mark.parametrize("source", ["fastapi-http", "starlette-http"])
 def test_http_exception_with_unnamed_status_is_an_internal_error(
-    client: TestClient, source: str
+    client: TestClient, caplog: pytest.LogCaptureFixture, source: str
 ) -> None:
     # 499처럼 HTTP 표준에 이름이 없는 상태는 처리기가 code를 정할 수 없다. 던진 코드의 잘못이므로
     # 예상하지 못한 문제(500, INTERNAL_ERROR)로 응답한다. 처리기 자신이 예외를 내면 안 된다.
     # client는 서버의 예외를 테스트로 다시 던지므로, 처리기가 터지면 여기서 실패한다.
-    response = client.get(f"/test/{source}/499")
+    with caplog.at_level(logging.ERROR, logger="app.core.errors"):
+        response = client.get(f"/test/{source}/499")
 
     assert response.status_code == 500
     assert response.json() == {
         "code": "INTERNAL_ERROR",
         "message": "서버에서 예상하지 못한 문제가 생겼습니다.",
     }
+    # 응답은 500이지만 던진 상태는 499다. 무엇을 던졌는지는 서버 로그에만 남는다.
+    records = error_records(caplog)
+    assert len(records) == 1, records
+    assert "499" in records[0].getMessage()
+    assert f"/test/{source}/499" in records[0].getMessage()
 
 
 @pytest.mark.parametrize("source", ["fastapi-http", "starlette-http"])
@@ -282,6 +301,16 @@ def test_http_exception_without_body_status_has_no_body(
 
     assert response.status_code == status_code
     assert response.content == b""
+
+
+@pytest.mark.parametrize("source", ["fastapi-http", "starlette-http"])
+def test_http_exception_without_body_keeps_its_headers(client: TestClient, source: str) -> None:
+    # 본문을 빼더라도 예외가 함께 실은 헤더(304의 ETag 등)는 그대로 보낸다.
+    response = client.get(f"/test/{source}/304", params={"etag": '"v1"'})
+
+    assert response.status_code == 304
+    assert response.content == b""
+    assert response.headers["etag"] == '"v1"'
 
 
 # --- OpenAPI 문서의 검증 실패 응답 (docs/API.md 1절, 2.3절) -------------------------
@@ -310,6 +339,7 @@ def test_openapi_documents_validation_failure_as_400_in_error_format(client: Tes
         assert set(error["properties"]) == set(actual) == {"code", "message", "detail"}
         assert set(error["required"]) == {"code", "message", "detail"}
         assert error["properties"]["code"]["type"] == "string"
+        assert error["properties"]["code"]["const"] == actual["code"] == "VALIDATION_ERROR"
         assert error["properties"]["message"]["type"] == "string"
         items = error["properties"]["detail"]
         assert items["type"] == "array"
@@ -317,6 +347,9 @@ def test_openapi_documents_validation_failure_as_400_in_error_format(client: Tes
         item = schemas[item_ref]
         assert set(item["properties"]) == set(actual["detail"][0]) == {"field", "reason"}
         assert set(item["required"]) == {"field", "reason"}
+        assert item["properties"]["field"]["type"] == "string"
+        assert item["properties"]["reason"]["type"] == "string"
+        assert all(isinstance(actual["detail"][0][key], str) for key in ("field", "reason"))
 
 
 def test_openapi_does_not_add_400_to_operations_without_input(client: TestClient) -> None:

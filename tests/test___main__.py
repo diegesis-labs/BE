@@ -39,6 +39,12 @@ try:
     raise RuntimeError("probe-exception")
 except RuntimeError:
     logger.exception("probe-error-message")
+
+# uvicorn 자신의 로그와 접근 로그. 앱의 로거를 더하면서 uvicorn의 설정을 버리면 사라진다.
+logging.getLogger("uvicorn.error").info("probe-uvicorn-info-message")
+logging.getLogger("uvicorn.access").info(
+    '%s - "%s %s HTTP/%s" %d', "127.0.0.1:50000", "GET", "/probe-access-path", "1.1", 200
+)
 """
 
 
@@ -84,3 +90,13 @@ def test_app_error_log_has_level_and_stack(tmp_path: Path) -> None:
     assert error_lines, output
     assert error_lines[0].startswith("ERROR:"), f"레벨이 붙지 않았다: {error_lines[0]!r}"
     assert "Traceback" in output and "RuntimeError: probe-exception" in output, output
+
+
+def test_uvicorn_logs_are_kept(tmp_path: Path) -> None:
+    # 앱의 로거를 더한 설정에도 uvicorn의 기본 설정(서버 로그와 접근 로그)이 남아 있어야 한다.
+    output = run_entrypoint("INFO", tmp_path)
+
+    assert "probe-uvicorn-info-message" in output, output
+    access_lines = [line for line in output.splitlines() if "/probe-access-path" in line]
+    assert access_lines, output
+    assert "200" in access_lines[0], access_lines

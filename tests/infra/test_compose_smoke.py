@@ -114,8 +114,9 @@ import subprocess
 import sys
 
 args = sys.argv[1:]
+# 한 줄이 호출 하나다. 인자 안의 줄바꿈(여러 줄의 파이썬 코드)은 \\n으로 적는다.
 with open(os.environ["FAKE_DOCKER_LOG"], "a", encoding="utf-8") as log:
-    log.write("".join(arg + "\\x1f" for arg in args) + "\\n")
+    log.write("".join(arg.replace("\\n", "\\\\n") + "\\x1f" for arg in args) + "\\n")
 
 
 def say(text):
@@ -162,6 +163,8 @@ if rest[:3] == ["exec", "-T", "api"]:
         code = inner[2]
         if "Uid:" in code:
             say(os.environ.get("FAKE_API_UIDS", "10001 10001 10001 10001"))
+        if os.environ.get("FAKE_ENV_SEARCH_EXIT"):
+            sys.exit(int(os.environ["FAKE_ENV_SEARCH_EXIT"]))
         root = os.environ["FAKE_IMAGE_ROOT"]
         extra = [root if arg == "/" else arg for arg in inner[3:]]
         result = subprocess.run(
@@ -196,11 +199,19 @@ def make_fake_image(tmp_path: Path) -> Path:
 
 
 def run_against_fake_stack(
-    tmp_path: Path, image_root: Path, env: dict[str, str] | None = None
+    tmp_path: Path,
+    image_root: Path,
+    env: dict[str, str] | None = None,
+    extra_bin: dict[str, str] | None = None,
 ) -> StackRun:
+    """정상인 스택을 흉내 내는 가짜 docker와 curl로 스크립트를 돌린다.
+
+    extra_bin의 가짜 명령(이름 → 내용)도 함께 PATH 앞에 둔다.
+    """
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    for name, content in (("docker", FAKE_STACK_DOCKER), ("curl", FAKE_STACK_CURL)):
+    fakes = {"docker": FAKE_STACK_DOCKER, "curl": FAKE_STACK_CURL, **(extra_bin or {})}
+    for name, content in fakes.items():
         fake = bin_dir / name
         fake.write_text(content, encoding="utf-8")
         fake.chmod(0o755)
@@ -223,6 +234,19 @@ def uses_project(call: list[str], project: str) -> bool:
         if flag in {"-p", "--project-name"} and value == project:
             return True
     return f"--project-name={project}" in call
+
+
+def exec_user(call: list[str]) -> str | None:
+    """`compose ... exec [옵션] 서비스 ...` 호출에서 실행 사용자(--user, -u)의 값."""
+    words = call[call.index("exec") + 1 :]
+    user = None
+    while words and words[0].startswith("-"):
+        flag = words.pop(0)
+        if flag in ("--user", "-u"):
+            user = words.pop(0)
+        elif flag.startswith("--user="):
+            user = flag.split("=", 1)[1]
+    return user
 
 
 def is_direct_build(call: list[str]) -> bool:
@@ -364,6 +388,10 @@ def test_script_passes_when_every_check_holds(tmp_path: Path) -> None:
         pytest.param(3, {"FAKE_HEALTH_BODY": '{"status":"ok","db":"ok"}'}, id="3-health-body"),
         pytest.param(4, {"FAKE_API_UIDS": "0 0 0 0"}, id="4-runs-as-root"),
         pytest.param(4, {"FAKE_API_UIDS": "10001 10001 0 10001"}, id="4-saved-uid-is-root"),
+        # uid를 하나도 읽지 못하면 확인하지 못한 것이다. 통과로 읽히면 안 된다.
+        pytest.param(4, {"FAKE_API_UIDS": ""}, id="4-uid-not-read"),
+        # .env를 찾는 명령이 실패하면 확인하지 못한 것이다. "찾은 것이 없다"로 읽히면 안 된다.
+        pytest.param(5, {"FAKE_ENV_SEARCH_EXIT": "1"}, id="5-env-search-failed"),
     ],
 )
 def test_script_fails_when_one_check_does_not_hold(
@@ -408,6 +436,22 @@ def test_script_fails_when_env_file_is_anywhere_in_image(tmp_path: Path, locatio
     assert "스모크 실패: (5)" in run.output, run.output
     assert location in run.output, "어디에서 .env를 찾았는지 알리지 않는다"
     assert "스모크 통과" not in run.output
+
+
+def test_env_file_search_runs_as_root(tmp_path: Path) -> None:
+    # 서버 프로세스의 사용자로는 root만 읽는 폴더(/root 등)를 볼 수 없다. os.walk는 읽지 못한 폴더를
+    # 말없이 건너뛰므로, root로 찾지 않으면 그 안의 .env를 놓친 채 통과한다. 가짜 이미지에서는
+    # 사용자에 따른 권한을 흉내 낼 수 없으므로, (5)의 exec에 넘긴 사용자를 직접 본다.
+    run = run_against_fake_stack(tmp_path, make_fake_image(tmp_path))
+
+    assert run.returncode == 0, run.output
+    searches = [
+        call
+        for call in compose_calls(run.calls)
+        if "exec" in call and "api" in call and any("os.walk" in word for word in call)
+    ]
+    assert len(searches) == 1, compose_calls(run.calls)
+    assert exec_user(searches[0]) in {"0", "root"}, searches[0]
 
 
 # --- 스모크 두 개가 겹치지 않는다 ------------------------------------------------
@@ -455,6 +499,69 @@ def test_script_refuses_while_another_smoke_holds_the_lock(tmp_path: Path) -> No
     # 다른 스모크의 컨테이너와 볼륨을 건드리지 않고, 그 잠금도 지우지 않는다.
     assert compose_calls(run.calls) == [], run.calls
     assert (lock / "pid").read_text(encoding="utf-8") == holder
+
+
+def test_script_refuses_a_lock_without_pid_file(tmp_path: Path) -> None:
+    # 다른 스모크가 잠금 폴더를 막 만들고 pid 파일을 아직 쓰지 않은 순간이다. 쥔 쪽을 알 수 없으므로
+    # 넘겨받지 않는다.
+    lock = lock_dir(tmp_path)
+    lock.mkdir(parents=True)
+
+    run = run_against_fake_stack(tmp_path, make_fake_image(tmp_path), lock_env(tmp_path))
+
+    assert run.returncode != 0, run.output
+    assert compose_calls(run.calls) == [], run.calls
+    assert lock.is_dir(), "다른 스모크의 잠금을 지웠다"
+    assert list(lock.iterdir()) == []
+
+
+# 가짜 rmdir. 잠금 폴더를 지운 바로 뒤에 다른 스모크가 그 잠금을 얻는 것을 흉내 낸다(한 번만).
+# 그 스모크는 살아 있는 프로세스(FAKE_RACE_HOLDER)다.
+FAKE_RMDIR_THEN_OTHER_TAKES_LOCK = """#!/bin/sh
+/bin/rmdir "$@"
+status=$?
+for arg in "$@"; do
+  if [ "$arg" = "$FAKE_LOCK_DIR" ] && [ ! -e "$FAKE_RACE_DONE" ]; then
+    : >"$FAKE_RACE_DONE"
+    /bin/mkdir "$FAKE_LOCK_DIR" && echo "$FAKE_RACE_HOLDER" >"$FAKE_LOCK_DIR/pid"
+  fi
+done
+exit $status
+"""
+
+
+def dead_pid() -> int:
+    """이미 끝난 프로세스의 pid."""
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    return dead.pid
+
+
+def test_script_gives_up_when_another_smoke_gets_the_lock_during_takeover(
+    tmp_path: Path,
+) -> None:
+    lock = lock_dir(tmp_path)
+    lock.mkdir(parents=True)
+    (lock / "pid").write_text(f"{dead_pid()}\n", encoding="utf-8")
+    holder = str(os.getpid())
+    env = {
+        **lock_env(tmp_path),
+        "FAKE_RACE_DONE": str(tmp_path / "race-done"),
+        "FAKE_RACE_HOLDER": holder,
+    }
+
+    run = run_against_fake_stack(
+        tmp_path,
+        make_fake_image(tmp_path),
+        env,
+        extra_bin={"rmdir": FAKE_RMDIR_THEN_OTHER_TAKES_LOCK},
+    )
+
+    assert (tmp_path / "race-done").exists(), "넘겨받는 도중에 잠금 폴더를 지우지 않았다"
+    assert run.returncode != 0, run.output
+    assert compose_calls(run.calls) == [], run.calls
+    current = (lock / "pid").read_text(encoding="utf-8").strip()
+    assert current == holder, "다른 스모크의 잠금을 덮었다"
 
 
 def test_script_takes_over_a_lock_left_by_a_dead_smoke(tmp_path: Path) -> None:
