@@ -23,7 +23,8 @@
       "name": "error-format",
       "status": "completed",
       "started_at": "2026-11-23T11:27:42+0900",
-      "summary": "app/core/errors.py에 AppError(status_code, code, message, detail=None)와 register_error_handlers를 두고 create_app()이 부르게 해서, AppError는 그 값대로, 요청 검증 실패는 400 VALIDATION_ERROR와 detail=[{field(위치를 뺀 점 경로, 예: item.price·extras.0.price), reason}]로, FastAPI·Starlette의 HTTP 예외는 401 NOT_AUTHENTICATED·404 NOT_FOUND·405 METHOD_NOT_ALLOWED와 그 밖의 상태는 HTTPStatus 이름으로(한국어 message, 예외의 detail은 버리고 Allow 같은 헤더는 유지), 처리되지 않은 예외는 500 INTERNAL_ERROR로(응답에 예외 내용 없음, logger.exception으로 스택을 로그에) 내보내며 detail은 None이면 키를 뺀다. RED 커밋 뒤 tests/core/test_errors.py에 TC-0.3.1~0.3.5 테스트 18개를 둔다. API.md에 대한 메모: 400과 403은 표에 있는 상태라서 HTTPException(400/403)이 HTTPStatus 이름(BAD_REQUEST/FORBIDDEN)으로 나가는 경우를 2.3절이 다루지 않는다 — 기능 코드는 그 둘을 AppError로 던져야 한다"
+      "summary": "app/core/errors.py에 AppError(status_code, code, message, detail=None)와 register_error_handlers를 두고 create_app()이 부르게 해서, AppError는 그 값대로, 요청 검증 실패는 400 VALIDATION_ERROR와 detail=[{field(위치를 뺀 점 경로, 예: item.price·extras.0.price), reason}]로, FastAPI·Starlette의 HTTP 예외는 401 NOT_AUTHENTICATED·404 NOT_FOUND·405 METHOD_NOT_ALLOWED와 그 밖의 상태는 HTTPStatus 이름으로(한국어 message, 예외의 detail은 버리고 Allow 같은 헤더는 유지), 처리되지 않은 예외는 500 INTERNAL_ERROR로(응답에 예외 내용 없음, logger.exception으로 스택을 로그에) 내보내며 detail은 None이면 키를 뺀다. RED 커밋 뒤 tests/core/test_errors.py에 TC-0.3.1~0.3.5 테스트 18개를 둔다. API.md에 대한 메모: 400과 403은 표에 있는 상태라서 HTTPException(400/403)이 HTTPStatus 이름(BAD_REQUEST/FORBIDDEN)으로 나가는 경우를 2.3절이 다루지 않는다 — 기능 코드는 그 둘을 AppError로 던져야 한다",
+      "completed_at": "2026-11-23T11:33:35+0900"
     },
     {
       "step": 3,
