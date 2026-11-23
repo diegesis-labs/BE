@@ -162,8 +162,16 @@ async def _handle_app_error(request: Request, exc: Exception) -> JSONResponse:
 
 async def _handle_validation_error(request: Request, exc: Exception) -> JSONResponse:
     errors = cast(RequestValidationError, exc).errors()
-    detail = [{"field": _field_name(error["loc"]), "reason": str(error["msg"])} for error in errors]
+    detail = [{"field": _field_of(error), "reason": str(error["msg"])} for error in errors]
     return _error_response(400, "VALIDATION_ERROR", _VALIDATION_ERROR_MESSAGE, detail)
+
+
+def _field_of(error: Mapping[str, Any]) -> str:
+    # 깨진 JSON의 위치(loc)에는 필드 이름이 아니라 글자 번호가 든다("body", 22). 가리킬 필드가
+    # 없으므로 본문 전체가 틀린 경우와 같이 빈 문자열을 쓴다(API.md 2.3절).
+    if error["type"] == "json_invalid":
+        return ""
+    return _field_name(error["loc"])
 
 
 def _field_name(loc: Sequence[object]) -> str:
