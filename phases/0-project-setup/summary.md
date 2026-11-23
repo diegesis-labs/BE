@@ -1,0 +1,47 @@
+- step 0 `app-skeleton`: FastAPI 앱, 설정 클래스, `python -m app` 진입점으로 서버의 뼈대를 만들었습니다.
+  - 설정 클래스는 `PORT`·`LOG_LEVEL`·`DATABASE_URL`만 읽으며, 환경변수가 `.env`보다 우선하고 `.env`에 있는 선언되지 않은 값은 무시합니다.
+  - `app.main`을 import하거나 `create_app()`을 불러도 설정을 읽지 않으므로, 단위 테스트는 `DATABASE_URL` 없이 돕니다.
+  - OpenAPI 문서는 `/api/openapi.json`에, 문서 화면은 `/api/docs`에만 열고, FastAPI의 기본 문서 경로와 `/docs/oauth2-redirect`는 닫았습니다.
+  - 진입점은 설정의 포트와 로그 레벨로 uvicorn을 `0.0.0.0`에서 띄우기만 하고, 앱의 `app` 로거에도 `LOG_LEVEL`을 거는 로그 설정은 `app/core/log_config.py`가 조립합니다.
+- step 1 `database`: compose의 PostgreSQL(pgvector) 서비스, 비동기 SQLAlchemy 엔진, `vector` 확장만 켜는 첫 마이그레이션을 가진 비동기 Alembic, 그리고 통합 테스트용 데이터베이스를 만들었습니다.
+  - `db` 서비스의 healthcheck는 `pg_isready -h 127.0.0.1`로 TCP 접속을 확인하므로, 첫 초기화 중에 유닉스 소켓만 연 임시 서버를 준비된 것으로 보지 않습니다.
+  - `app/core/database.py`는 import만으로 엔진을 만들거나 설정을 읽지 않으며, 주소를 넘기지 않을 때에만 설정의 `database_url`을 씁니다.
+  - 마이그레이션 환경은 호출한 쪽이 넘긴 `sqlalchemy.url`을 설정보다 먼저 쓰며, `alembic.ini`에는 접속 주소를 적지 않습니다.
+  - `alembic revision`으로 만든 파일은 레포 최상위를 작업 경로로 도는 훅이 `ruff check --fix`와 `ruff format`으로 고칩니다.
+  - 통합 테스트는 testcontainers가 `compose.yaml`의 `db` 이미지를 읽어 무작위 포트로 띄운 데이터베이스에서 돌며, Docker에 닿을 수 없으면 건너뛰지 않고 실패합니다.
+- step 2 `error-format`: 모든 에러 응답을 `{code, message, detail}` 형식으로 바꾸는 `AppError`와 에러 처리기를 만들어 `create_app()`에 등록했습니다.
+  - 요청 검증 실패는 400 `VALIDATION_ERROR`로 응답하며, `detail`의 `field`는 위치를 뺀 점 경로(`item.price`, `extras.0.price`)이고 가리킬 필드가 없으면 빈 문자열입니다.
+  - HTTP 예외는 API.md 2.3절의 표에 있는 400·401·404·405·500을 그 표의 code로, 표에 없는 상태를 HTTP 상태의 영문 이름으로 내보내며, 이름이 없는 상태(499 등)는 500 `INTERNAL_ERROR`로 응답합니다.
+  - 본문이 허용되지 않는 1xx·204·205·304의 HTTP 예외는 예외가 실은 헤더만 담은 본문 없는 응답으로 내보냅니다.
+  - 응답에는 예외의 detail, 메시지, 스택을 싣지 않으며, 처리되지 않은 예외와 5xx·이름 없는 상태의 HTTP 예외는 서버 로그에만 스택과 함께 남깁니다.
+  - OpenAPI 문서에서도 FastAPI 기본의 422 응답을 지우고, 공통 에러 형식의 400 스키마(`ValidationErrorResponse`)를 싣습니다.
+- step 3 `health-router`: 서버 프로세스가 살아 있으면 `{"status": "ok"}`를 돌려주는 `GET /api/health`를 `app/health/`에 만들었습니다.
+  - 헬스체크는 데이터베이스, 설정, 외부 서비스에 접근하지 않으며, 서버와 데이터베이스의 연결은 compose 스모크가 대신 확인합니다(D-39).
+  - 응답 스키마의 `status`는 `"ok"` 하나만 허용하므로 OpenAPI 문서에도 그 값만 드러납니다.
+  - 라우터는 `/api` 접두사로 등록되어, 접두사 없는 `/health`는 404로, `POST /api/health`는 `Allow: GET`이 붙은 405로 공통 에러 형식을 따라 응답합니다.
+- step 4 `container`: 멀티 스테이지 `Dockerfile`과 `.dockerignore`, 마이그레이션과 서버를 더한 compose 구성, 그것을 실제로 띄워 확인하는 `scripts/compose-smoke.sh`를 만들었습니다.
+  - 이미지는 `uv.lock`대로 설치한 운영 의존성과 `app/`·`migrations/`·`alembic.ini`만 담고, uid 10001의 root가 아닌 사용자로 `python -m app`을 실행합니다.
+  - compose의 `migrate`가 서버와 같은 이미지로 `alembic upgrade head`를 한 번 실행하고, `api`는 그것이 성공한 뒤에 뜹니다(D-40).
+  - `db`와 `api`의 호스트 포트는 `DB_PORT`·`API_PORT`(기본 5432·8080)로 바꿀 수 있으며, 이 컴퓨터(127.0.0.1)에만 열립니다.
+  - 스모크는 고정된 프로젝트 이름 `diegesis-smoke`, Docker가 고른 빈 포트, 임시 폴더의 잠금을 써서 개발용 compose나 다른 스모크와 부딪히지 않게 돕니다.
+  - 스모크는 migrate가 종료 코드 0으로 끝났는지, 데이터베이스에 `vector` 확장이 있는지, 호스트에서 받은 `/api/health`의 본문이 맞는지, api 프로세스가 root가 아닌지, 이미지 어디에도 `.env`가 없는지를 확인하고 끝나면 볼륨까지 내립니다.
+- step 5 `readme`: README에 로컬에서 서버를 띄우는 방법을 더하고, 현재 상태와 개발 환경과 폴더 구조를 지금의 레포에 맞게 고쳤습니다.
+  - "로컬에서 서버 띄우기" 절은 `docker compose up --build -d --wait`로 띄운 뒤 브라우저에서 `/api/health`와 `/api/docs`를 여는 순서로 안내합니다.
+  - `docker compose ps -a`에서 `migrate`가 `Exited (0)`으로 보이는 것이 정상이며, 그렇지 않으면 `docker compose logs migrate`로 원인을 보라고 적었습니다.
+  - `docker compose down`은 데이터베이스의 데이터를 남기고, `down -v`는 데이터까지 되돌릴 수 없게 지운다고 구분해 적었습니다.
+  - 포트가 이미 쓰이고 있을 때 `API_PORT`·`DB_PORT`를 넘기는 명령을 zsh·bash와 PowerShell의 두 문법으로 적었습니다.
+  - compose로 띄울 때에는 서버의 접속 주소를 `compose.yaml`이 넘겨주므로 `.env`가 필요 없다고 적었습니다.
+- step 6 `ci-workflow`: `main`을 향한 PR과 `main`의 push에서 검사, compose 스모크, 이미지 빌드를 돌리고, `main`의 push에서만 Docker Hub에 이미지를 올리는 GitHub Actions workflow(`.github/workflows/ci.yml`)를 만들었습니다.
+  - `check` job은 `Dockerfile`과 같은 버전의 uv로 `uv sync --locked`와 `scripts/check.sh`만 실행하며, 검사 명령을 workflow에 따로 적지 않습니다.
+  - `image` job은 검사와 스모크가 모두 통과한 뒤에 돌고, PR에서는 secrets와 variables에 기대지 않고 `linux/amd64` 이미지를 빌드만 합니다.
+  - `main`의 push에서는 `DOCKERHUB_IMAGE` variable이 비어 있으면 등록할 값의 이름을 알리고 멈추며, 비어 있지 않으면 로그인한 뒤 `latest`와 `sha-<커밋>` 태그로 이미지를 올립니다.
+  - 새 커밋이 온 PR의 이전 실행은 취소하지만, `main`의 push는 그 커밋의 이미지가 빠지지 않도록 취소하지 않습니다.
+  - 테스트가 개발 의존성으로 설치한 actionlint로 workflow를 검사하며, actionlint가 없으면 건너뛰지 않고 실패합니다.
+- 그 밖에
+  - Epic 0 문서와 테스트 케이스를 더하고, 설계에서 정한 결정을 D-36~D-41과 ADR-011(통합 테스트용 데이터베이스는 testcontainers로 띄운다)로 기록했습니다.
+  - API.md 2.3절에는 검증 오류의 `field` 규칙을, INFRA.md 3.7절에는 이미지를 올리기까지의 흐름과 GitHub에 등록할 값의 이름을 적는 등, 기존 문서를 Epic 0에서 만든 것에 맞게 고쳤습니다.
+  - `scripts/hooks/bash-guard.sh`는 헤드리스 세션에서 이미지 push와 레지스트리 로그인(`docker push`, `docker login`, compose push, `--push` 빌드)을 막으며, 이 규칙이 놓치는 형태와 오탐은 주석에 적었습니다.
+  - `scripts/hooks/tdd-guard.sh`는 uvicorn을 띄우기만 하는 `app/__main__.py`를 테스트를 먼저 쓰지 않아도 되는 파일로 둡니다.
+  - `scripts/harness-summary.sh`가 리뷰와 처분이 닫힌 뒤 별도 세션으로 최종 요약(`summary.md`)을 쓰고, `scripts/harness-pr.sh`는 그 요약을 PR 본문의 "만든 것"에 실으며 요약이 없거나 낡았으면 PR을 막습니다.
+
+<!-- summary-of: 284ee65458bd6f8e920a2528cc81c7d318553f8d -->
