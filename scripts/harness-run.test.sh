@@ -125,9 +125,6 @@ check "줄이 여럿이면 마지막 것" 1 "$(read_marker "$M" verdict major)"
 #   $SCENARIO/review_mode   — noreport | nomarker
 #   $SCENARIO/fix_mode      — nofile | nomarker | dirty | uncommitted
 #   $SCENARIO/calls         — 호출 기록 ("review" / "fix", 그리고 --model 값)
-#   $SCENARIO/summary_mode  — nofile이면 요약 세션이 아무것도 쓰지 않는다
-#   $SCENARIO/summary_calls — 요약 세션의 호출 기록. calls와 따로 두어 리뷰 루프의 기대를 흔들지 않는다
-#   $SCENARIO/summary_prompt — 요약 세션이 받은 프롬프트
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STUB_BIN="$TMP/bin"
@@ -142,14 +139,6 @@ for a in "$@"; do
   prev="$a"
 done
 dir="phases/demo/review"
-# 요약 세션도 HARNESS_REVIEW를 받으므로 리뷰보다 먼저 가른다.
-if [ -n "${HARNESS_SUMMARY:-}" ]; then
-  echo "summary" >>"$SCENARIO/summary_calls"
-  printf '%s' "$prev" >"$SCENARIO/summary_prompt"
-  [ "$(cat "$SCENARIO/summary_mode" 2>/dev/null)" = "nofile" ] && exit 0
-  printf -- '- step 0 `demo`: 요약\n' >phases/demo/summary.md
-  exit 0
-fi
 if [ -n "${HARNESS_REVIEW:-}" ]; then
   echo "review model=$model run=${HARNESS_RUN:-}" >>"$SCENARIO/calls"
   mode="$(cat "$SCENARIO/review_mode" 2>/dev/null)"
@@ -184,7 +173,7 @@ chmod +x "$STUB_BIN/claude"
 make_repo() { # make_repo <이름> <execute.py 종료 코드> → worktree 경로를 찍는다
   local base="$TMP/$1" wt="$TMP/$1-wt"
   mkdir -p "$base/scripts" "$base/phases/demo"
-  cp "$SCRIPT_DIR/harness-run.sh" "$SCRIPT_DIR/harness-summary.sh" "$base/scripts/"
+  cp "$SCRIPT_DIR/harness-run.sh" "$base/scripts/"
   printf 'import sys\nsys.exit(%s)\n' "$2" >"$base/scripts/execute.py"
   printf '%s' "$ALL_DONE" >"$base/phases/demo/index.json"
   printf 'phases/**/review/session.log\n' >"$base/.gitignore"
@@ -215,11 +204,9 @@ scenario() { # scenario <이름> <verdict 줄...>
   shift
   printf '%s\n' "$@" >"$SCENARIO/verdicts"
   : >"$SCENARIO/calls"
-  : >"$SCENARIO/summary_calls"
 }
 
 calls() { tr '\n' ' ' <"$SCENARIO/calls" | sed -E 's/ model=[^ ]*//g; s/ run=[^ ]*//g; s/ $//'; }
-sumcalls() { tr '\n' ' ' <"$SCENARIO/summary_calls" | sed 's/ $//'; }
 subjects() { git -C "$1" log --format=%s main..HEAD | tr '\n' '|'; }
 
 echo "worktree 판정"
@@ -237,7 +224,7 @@ WT="$(make_repo clean 0)"
 scenario clean "0 0 0"
 run_loop "$WT"
 check "리뷰 한 번, 처분 없음, 종료 0" "0:review" "$RC:$(calls)"
-check "리포트와 최종 요약이 커밋된다" "docs(demo): 최종 요약|docs(demo): 1차 리뷰 리포트 — critical 0 · major 0 · minor 0|" "$(subjects "$WT")"
+check "리포트가 커밋된다" "docs(demo): 1차 리뷰 리포트 — critical 0 · major 0 · minor 0|" "$(subjects "$WT")"
 
 echo "루프: minor만"
 WT="$(make_repo minor 0)"
@@ -363,52 +350,6 @@ check "사람 판단 필요가 남은 채 다시 돌리면 리뷰 없이 6" "6:"
   git add -A && git -c user.name=t -c user.email=t@t commit --quiet -m "docs(demo): 사람이 정했다")
 run_loop "$WT"
 check "사람이 정하고 숫자를 고치면 통과한다" "0:" "$RC:$(calls)"
-
-echo "최종 요약"
-WT="$(make_repo sum 0)"
-scenario sum "0 0 0"
-run_loop "$WT"
-check "리뷰가 닫히면 요약 세션을 한 번 띄운다" "0:summary" "$RC:$(sumcalls)"
-check "요약을 마지막에 커밋한다" "docs(demo): 최종 요약" "$(git -C "$WT" log -1 --format=%s)"
-check "작업 트리가 깨끗하다" "" "$(git -C "$WT" status --porcelain)"
-: >"$SCENARIO/summary_calls"
-run_loop "$WT"
-check "다시 돌려도 코드가 그대로면 요약을 다시 쓰지 않는다" "0:" "$RC:$(sumcalls)"
-
-WT="$(make_repo sum-fix 0)"
-scenario sum-fix "0 0 2"
-run_loop "$WT"
-check "처분한 코드까지 다룬다 — 판독용 줄이 처분의 수정 커밋이다" \
-  "<!-- summary-of: $(git -C "$WT" log -1 --format=%H -- code.txt) -->" "$(tail -n 1 "$WT/phases/demo/summary.md")"
-
-WT="$(make_repo sum-human 0)"
-scenario sum-human "0 0 2"
-echo 1 >"$SCENARIO/needs_human"
-run_loop "$WT"
-check "사람 판단 필요가 남으면 요약하지 않는다" "6:" "$RC:$(sumcalls)"
-
-WT="$(make_repo sum-manual 5)"
-scenario sum-manual "0 0 0"
-run_loop "$WT"
-check "MANUAL 미확인(5)이어도 리뷰가 닫혔으면 요약하고 5로 끝난다" "5:summary" "$RC:$(sumcalls)"
-
-WT="$(make_repo sum-nofix 0)"
-scenario sum-nofix "0 2 0"
-run_loop "$WT" --no-fix
-check "--no-fix로 처분 없이 끝나면 요약하지 않는다" "0:" "$RC:$(sumcalls)"
-
-WT="$(make_repo sum-fail 0)"
-scenario sum-fail "0 0 0"
-echo nofile >"$SCENARIO/summary_mode"
-run_loop "$WT"
-check "요약을 쓰지 못해도 종료 코드는 그대로다" 0 "$RC"
-check "그때 경고를 남긴다" 1 "$(grep -c '최종 요약(phases/demo/summary.md)을 쓰지 못했다' "$TMP/out.log")"
-
-WT="$(make_repo sum-base 0)"
-(cd "$TMP/sum-base" && git branch --quiet prev main) >/dev/null 2>&1
-scenario sum-base "0 0 0"
-run_loop "$WT" --review-base prev
-check "--review-base를 요약의 범위로 넘긴다" 1 "$(grep -c 'prev\.\.\.HEAD' "$SCENARIO/summary_prompt")"
 
 echo "세션 환경"
 WT="$(make_repo env 0)"

@@ -136,6 +136,7 @@ expect_cmd_env deny  'git push -u origin feat-x'      HARNESS_RUN=1    "무인 s
 expect_cmd_env deny  'git push'                       HARNESS_REVIEW=1 "리뷰 세션도"
 expect_cmd_env deny  'gh pr create --fill'            HARNESS_RUN=1    "PR 생성"
 expect_cmd_env deny  'gh pr merge 3 --merge'          HARNESS_RUN=1    "PR 머지"
+expect_cmd_env deny  'gh pr edit 3 --body-file b.md'  HARNESS_REVIEW=1 "PR 본문 고치기"
 expect_cmd_env deny  'gh issue create -t x'           HARNESS_RUN=1    "이슈 생성"
 expect_cmd_env allow 'gh pr view 3'                   HARNESS_RUN=1    "읽기는 통과"
 expect_cmd_env allow 'gh issue view 1'                HARNESS_RUN=1    "이슈 읽기"

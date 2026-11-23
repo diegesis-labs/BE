@@ -86,8 +86,8 @@ if [ -n "$HEADLESS" ]; then
   if has '(^|[^[:alnum:]_])git[[:space:]]+push([[:space:]]|$)'; then
     deny "헤드리스 세션은 push하지 않는다(git push). 커밋까지만 해라."
   fi
-  if has '(^|[^[:alnum:]_])gh[[:space:]]+(pr[[:space:]]+(create|merge|close)|issue[[:space:]]+(create|close)|release[[:space:]]+create)([[:space:]]|$)'; then
-    deny "헤드리스 세션은 PR·이슈·릴리스를 만들거나 닫지 않는다(gh)."
+  if has '(^|[^[:alnum:]_])gh[[:space:]]+(pr[[:space:]]+(create|edit|merge|close)|issue[[:space:]]+(create|close)|release[[:space:]]+create)([[:space:]]|$)'; then
+    deny "헤드리스 세션은 PR·이슈·릴리스를 만들거나 고치거나 닫지 않는다(gh)."
   fi
   # 컨테이너 이미지는 main에 합쳐진 코드만 CI가 올린다(docs/DECISIONS.md D-36). Docker Hub
   # 저장소가 공개라서 한번 올라간 이미지는 누구나 받아 간다(D-37). 로그인도 막는다 — 무인
