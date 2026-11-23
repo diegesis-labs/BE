@@ -35,7 +35,7 @@ PR을 연 뒤와 `main`에 합친 뒤에 확인하는 것은 다음과 같습니
 1. 첫 PR에서 CI의 `check`, `compose-smoke`, `image`(빌드만 함) job이 모두 통과합니다.
 2. `main`에 ruleset을 겁니다. PR을 거쳐야만 합칠 수 있고, CI의 검사가 통과해야 하며, 강제 push를 막습니다(D-38).
 3. PR을 `main`에 합친 뒤 `main`의 CI가 통과하고, Docker Hub에 `latest`와 `sha-<커밋>` 태그의 이미지가 올라갑니다.
-4. [backlog/README.md](../README.md)의 상태를 `완료`로 바꾸고 이슈 #4를 닫습니다.
+4. 이슈 #4가 닫힙니다.
 
 ## 범위 밖
 

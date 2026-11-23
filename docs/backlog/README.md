@@ -9,13 +9,13 @@ description: 구현할 일을 Epic 단위로 나눈 목록과, Epic 문서와 �
 
 ## 1. Epic 목록
 
-Epic 하나는 GitHub 이슈 하나와 짝을 이룹니다. 이슈는 팀이 진행 상황을 보는 곳이고, Epic 문서는 에이전트와 리뷰가 근거로 삼는 곳입니다. Story마다 이슈를 따로 만들지는 않습니다.
+Epic 하나는 GitHub 이슈 하나와 짝을 이룹니다. Epic의 진행 상황은 이슈로만 보고, Epic 문서는 에이전트와 리뷰가 근거로 삼는 곳입니다. Epic의 PR이 `main`에 합쳐지면 PR 본문의 `Closes #<번호>`가 이슈를 닫습니다. Story마다 이슈를 따로 만들지는 않습니다.
 
-| 번호 | Epic | 목표 | GitHub 이슈 | 문서 | 상태 |
-| --- | --- | --- | --- | --- | --- |
-| 0 | project-setup | 비즈니스 로직 없이 개발 환경을 세팅하고, harness 워크플로우가 처음부터 `main` 병합과 이미지 push까지 동작하는지 확인한다. | #4 | [`epic-0/E0-project-setup.md`](epic-0/E0-project-setup.md) | 진행 중 |
+| 번호 | Epic | 목표 | GitHub 이슈 | 문서 |
+| --- | --- | --- | --- | --- |
+| 0 | project-setup | 비즈니스 로직 없이 개발 환경을 세팅하고, harness 워크플로우가 처음부터 `main` 병합과 이미지 push까지 동작하는지 확인한다. | #4 | [`epic-0/E0-project-setup.md`](epic-0/E0-project-setup.md) |
 
-문서 칸에는 Epic 문서로 가는 링크를 겁니다. 상태는 `준비 중`, `진행 중`, `완료` 가운데 하나로 적습니다. PR이 `main`에 합쳐졌을 때 `완료`로 바꿉니다.
+문서 칸에는 Epic 문서로 가는 링크를 겁니다.
 
 버그를 고치는 작업은 `bugfix-<번호>`라는 이름으로 같은 표에 넣으며, 문서는 `docs/backlog/bugfix-<번호>/`에 둡니다.
 
