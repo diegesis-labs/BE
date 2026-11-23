@@ -207,35 +207,64 @@ def round_of(path: Path) -> int:
     return int(path.stem.split("-")[1])
 
 
+def marker(path: Path, kind: str, key: str) -> int | None:
+    """파일 끝의 판독용 줄에서 값을 읽는다. 관문의 marker와 같은 규칙이다."""
+    lines = [
+        line
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if re.fullmatch(rf"<!-- {kind}: .*-->\s*", line)
+    ]
+    found = re.findall(rf"(?:^|\s){re.escape(key)}=(\d+)", lines[-1]) if lines else []
+    return int(found[-1]) if found else None
+
+
+def shown(value: int | None) -> str:
+    return "?" if value is None else str(value)
+
+
+# 라운드마다 리뷰가 찾은 결함과 그 처분을 한 줄에 싣는다. 리뷰 리포트의 판정표를 그대로 옮기지
+# 않는다 — 그 표는 처분 전의 상태라서, 처분으로 닫힌 결함이 남아 있는 것처럼 읽힌다.
 reviews = sorted(
     (p for p in review_dir.glob("review-*.md") if re.fullmatch(r"review-\d+", p.stem)), key=round_of
 )
-out += ["## 리뷰", ""]
+out += ["## 리뷰와 처분", ""]
 if reviews:
+    rows: list[str] = []
+    quotes: list[str] = []
+    rejected_total = 0
+    for review in reviews:
+        n = round_of(review)
+        found = " · ".join(shown(marker(review, "verdict", k)) for k in ("critical", "major", "minor"))
+        fix = review_dir / f"fix-{n}.md"
+        if fix.exists():
+            fixed, rejected, waiting = (marker(fix, "disposition", k) for k in ("fixed", "rejected", "needs-human"))
+            rejected_total += rejected or 0
+            rows.append(f"| {n}차 | {found} | {shown(fixed)} | {shown(rejected)} | {shown(waiting)} |")
+            quote = [line[1:].strip() for line in fix.read_text(encoding="utf-8").splitlines() if line.startswith(">")]
+            quotes.append(f"- {n}차 `{fix.relative_to(root)}`: {' '.join(quote) or '(머리 요약 없음)'}")
+        else:
+            rows.append(f"| {n}차 | {found} | — | — | — |")
+    out += [
+        f"리뷰를 {len(reviews)}라운드 돌았습니다. 라운드마다 별도 세션이 리뷰하고, 또 다른 세션이 처분했습니다.",
+        "",
+        "| 라운드 | 리뷰가 찾은 결함 (critical · major · minor) | 고침 | 기각 | 사람 판단 필요 |",
+        "|---|---|---|---|---|",
+        *rows,
+        "",
+    ]
+    # 관문이 확인한 것: 마지막 리뷰에 critical·major가 없고, 모든 처분 기록의 사람 판단 필요가 0이다.
+    closing = ["남은 결함은 없습니다. 리뷰가 찾은 결함은 모두 고쳤거나, 근거를 들어 기각했습니다."]
+    if rejected_total:
+        closing.append(f"기각한 {rejected_total}건의 근거는 각 라운드의 처분 기록에 있습니다.")
     last = reviews[-1]
-    out += [f"{len(reviews)}라운드를 돌았습니다. 아래는 마지막 리포트(`{last.relative_to(root)}`)의 종합 판정입니다.", ""]
-    section: list[str] = []
-    inside = False
-    for line in last.read_text(encoding="utf-8").splitlines():
-        if line.startswith("## "):
-            if inside:
-                break
-            inside = line.strip() == "## 종합 판정"
-            continue
-        if inside and not line.startswith("<!--"):
-            section.append(line)
-    out += [line for line in "\n".join(section).strip().splitlines()] or ["(종합 판정 절을 찾지 못했습니다)"]
-    out.append("")
-
-fixes = sorted(review_dir.glob("fix-*.md"), key=round_of)
-if fixes:
-    out += ["## 리뷰 처분", ""]
-    for fix in fixes:
-        quote = [
-            line[1:].strip() for line in fix.read_text(encoding="utf-8").splitlines() if line.startswith(">")
-        ]
-        out.append(f"- `{fix.relative_to(root)}`: {' '.join(quote) or '(머리 요약 없음)'}")
-    out.append("")
+    n = round_of(last)
+    if (review_dir / f"fix-{n}.md").exists():
+        closing.append(f"마지막 라운드({n}차)는 minor만 있어서, 처분한 결과를 다시 리뷰하지 않았습니다.")
+    else:
+        closing.append(f"마지막 리뷰({n}차)는 결함을 찾지 못했습니다.")
+    out += [" ".join(closing), ""]
+    if quotes:
+        out += quotes + [""]
 
 out += ["## 사람이 확인한 것", ""]
 manual = phase / "MANUAL.md"
