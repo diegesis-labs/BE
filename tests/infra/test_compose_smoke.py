@@ -133,6 +133,15 @@ if args[:1] != ["compose"]:
 rest = args[1:]
 while rest[:1] in (["-p"], ["-f"], ["--env-file"]):
     rest = rest[2:]
+# exec의 실행 사용자(--user, -u)는 가짜 이미지에서 뜻이 없으므로 건너뛴다.
+if rest[:1] == ["exec"]:
+    words = rest[1:]
+    rest = ["exec"]
+    while words:
+        if words[0] in ("--user", "-u"):
+            words = words[2:]
+            continue
+        rest.append(words.pop(0))
 if rest[:1] == ["up"] and os.environ.get("FAKE_LOCK_DIR"):
     # 스택을 띄우는 동안 스크립트가 잠금을 쥐고 있는지 기록한다.
     with open(os.environ["FAKE_LOCK_LOG"], "a", encoding="utf-8") as log:

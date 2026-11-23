@@ -14,11 +14,13 @@ from app.health.router import router as health_router
 def create_app() -> FastAPI:
     # 모든 경로에 /api 접두사를 붙인다(docs/API.md 1절).
     # 문서도 그 아래에 두고, 기본 경로(/openapi.json, /docs, /redoc)는 열지 않는다.
+    # 문서 화면의 OAuth2 로그인이 돌아오는 경로(/docs/oauth2-redirect)도 쓰지 않으므로 닫는다.
     app = FastAPI(
         title="Diegesis BE",
         openapi_url="/api/openapi.json",
         docs_url="/api/docs",
         redoc_url=None,
+        swagger_ui_oauth2_redirect_url=None,
     )
     # 모든 에러 응답을 {code, message, detail} 형식으로 바꾼다(docs/API.md 2.3절).
     register_error_handlers(app)

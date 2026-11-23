@@ -35,6 +35,25 @@ readonly DB_USER="diegesis"
 readonly DB_NAME="diegesis"
 readonly VECTOR_QUERY="SELECT extversion FROM pg_extension WHERE extname = 'vector'"
 readonly HEALTH_BODY='{"status":"ok"}'
+# 인자로 받은 폴더 아래의 모든 .env 파일의 경로를 한 줄에 하나씩 찍는다. 커널이 만드는 가상 파일
+# 시스템(proc, sys, dev)은 이미지의 내용이 아니므로 건너뛴다.
+readonly ENV_FILE_SEARCH='
+import os
+import sys
+
+root = sys.argv[1]
+virtual = {os.path.join(root, name) for name in ("proc", "sys", "dev")}
+for top, dirs, files in os.walk(root):
+    dirs[:] = [name for name in dirs if os.path.join(top, name) not in virtual]
+    if ".env" in files:
+        print(os.path.join(top, ".env"))
+'
+
+# 모든 worktree가 같은 프로젝트 이름을 쓰므로, 스모크 두 개가 겹치면 서로의 컨테이너와 볼륨을 지운다.
+# 그래서 임시 폴더에 잠금 폴더를 만들어 한 번에 하나만 돌게 한다. mkdir은 폴더가 이미 있으면 실패하므로
+# 둘이 동시에 시작해도 하나만 잠금을 얻는다. 잠금 안의 pid 파일로 쥔 스모크가 살아 있는지 본다.
+lock_base=${TMPDIR:-/tmp}
+readonly LOCK_DIR="${lock_base%/}/${PROJECT}.lock"
 
 export API_PORT=0
 export DB_PORT=0
@@ -52,6 +71,33 @@ ok() {
   echo "확인: $1"
 }
 
+acquire_lock() {
+  local holder
+  if mkdir "$LOCK_DIR" 2>/dev/null; then
+    echo "$$" >"$LOCK_DIR/pid"
+    return 0
+  fi
+  holder=$(cat "$LOCK_DIR/pid" 2>/dev/null || true)
+  if [ -z "$holder" ]; then
+    fail "다른 스모크가 막 시작했거나 잠금(${LOCK_DIR})이 비어 있다. 도는 스모크가 없으면 그 폴더를 지우고 다시 실행해라"
+  fi
+  if kill -0 "$holder" 2>/dev/null; then
+    fail "다른 스모크(PID ${holder})가 ${PROJECT} 프로젝트로 돌고 있다. 그것이 끝난 뒤 다시 실행해라(잠금: ${LOCK_DIR})"
+  fi
+  # 정리할 틈 없이 끝난(kill -9 등) 스모크가 남긴 잠금이다.
+  echo "=== 끝난 스모크(PID ${holder})가 남긴 잠금을 넘겨받는다"
+  rm -f "$LOCK_DIR/pid"
+  rmdir "$LOCK_DIR" 2>/dev/null || true
+  mkdir "$LOCK_DIR" 2>/dev/null \
+    || fail "다른 스모크가 방금 잠금(${LOCK_DIR})을 얻었다. 그것이 끝난 뒤 다시 실행해라"
+  echo "$$" >"$LOCK_DIR/pid"
+}
+
+release_lock() {
+  rm -f "$LOCK_DIR/pid"
+  rmdir "$LOCK_DIR" 2>/dev/null || true
+}
+
 cleanup() {
   local status=$?
   trap - EXIT
@@ -66,6 +112,7 @@ cleanup() {
   if ! compose down --volumes --remove-orphans --rmi local >/dev/null 2>&1; then
     echo "경고: ${PROJECT}를 내리지 못했다. 'docker compose -p ${PROJECT} down --volumes'로 직접 내려라." >&2
   fi
+  release_lock
   exit "$status"
 }
 
@@ -73,6 +120,8 @@ command -v docker >/dev/null 2>&1 || fail "docker 명령을 찾을 수 없다"
 command -v curl >/dev/null 2>&1 || fail "curl 명령을 찾을 수 없다"
 docker info >/dev/null 2>&1 || fail "Docker에 닿을 수 없다. Docker Desktop을 켠 뒤 다시 실행해라"
 
+# 잠금을 얻지 못하면 정리(cleanup)를 걸기 전에 끝난다. 다른 스모크의 컨테이너와 잠금을 건드리지 않는다.
+acquire_lock
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -129,11 +178,11 @@ for uid in $api_uids; do
 done
 ok "(4) api 컨테이너의 프로세스가 root가 아니다(Uid: ${api_uids})"
 
-# (5) api 이미지 안의 작업 폴더에 .env 파일이 없다.
-api_workdir=$(compose exec -T api pwd) || fail "(5) api 컨테이너의 작업 폴더를 읽지 못했다"
-env_present=$(compose exec -T api python -c 'import os; print("yes" if os.path.lexists(".env") else "no")') \
-  || fail "(5) api 컨테이너에서 .env 파일을 확인하지 못했다"
-[ "$env_present" = "no" ] || fail "(5) api 이미지의 작업 폴더(${api_workdir})에 .env 파일이 있다"
-ok "(5) api 이미지의 작업 폴더(${api_workdir})에 .env 파일이 없다"
+# (5) api 이미지 안에 .env 파일이 없다. 작업 폴더만이 아니라 파일 시스템 전체를 본다. 서버 프로세스의
+# 사용자로는 root만 읽을 수 있는 폴더(/root 등)를 볼 수 없으므로 root로 찾는다.
+env_files=$(compose exec -T --user 0 api python -c "$ENV_FILE_SEARCH" /) \
+  || fail "(5) api 컨테이너에서 .env 파일을 찾지 못했다"
+[ -z "$env_files" ] || fail "(5) api 이미지 안에 .env 파일이 있다: ${env_files}"
+ok "(5) api 이미지 안에 .env 파일이 없다"
 
 echo "스모크 통과: 다섯 가지를 모두 확인했다"

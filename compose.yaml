@@ -23,7 +23,9 @@ services:
       # PostgreSQL 18부터 이미지의 데이터 경로가 /var/lib/postgresql 아래로 바뀌었다.
       - db-data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U diegesis -d diegesis"]
+      # TCP로 확인한다. 첫 초기화 중에 이미지가 띄우는 임시 서버는 유닉스 소켓만 열기 때문에, 소켓만 보면
+      # 그때 healthy가 되어 TCP로 붙는 migrate가 거부당할 수 있다.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U diegesis -d diegesis"]
       interval: 2s
       timeout: 5s
       retries: 30

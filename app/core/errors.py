@@ -5,29 +5,67 @@
 """
 
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from http import HTTPStatus
-from typing import cast
+from typing import Any, cast
 
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.utils import is_body_allowed_for_status_code
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.responses import Response
 
 logger = logging.getLogger(__name__)
+
+_VALIDATION_ERROR_MESSAGE = "요청 형식이 올바르지 않습니다."
+_INTERNAL_ERROR_MESSAGE = "서버에서 예상하지 못한 문제가 생겼습니다."
+_OTHER_HTTP_ERROR_MESSAGE = "요청을 처리할 수 없습니다."
 
 # docs/API.md 2.3절의 표에서 상태만으로 code가 하나로 정해지는 HTTP 예외의 code와 message.
 # 403은 NOT_ALLOWED와 ADMIN_ONLY 두 가지라서 상태만으로 고를 수 없다. 그 기능이 AppError로 던진다.
 # 표에 없는 상태는 HTTPStatus의 이름을 code로 쓴다(예: 409 → CONFLICT).
+# 400은 FastAPI가 본문을 해석하지 못할 때(UTF-8이 아닌 바이트, 깨진 multipart) 스스로 던진다.
 _HTTP_ERRORS: dict[int, tuple[str, str]] = {
+    400: ("VALIDATION_ERROR", _VALIDATION_ERROR_MESSAGE),
     401: ("NOT_AUTHENTICATED", "로그인이 필요합니다."),
     404: ("NOT_FOUND", "요청한 대상을 찾을 수 없습니다."),
     405: ("METHOD_NOT_ALLOWED", "이 경로에서는 쓸 수 없는 메서드입니다."),
+    500: ("INTERNAL_ERROR", _INTERNAL_ERROR_MESSAGE),
 }
-_OTHER_HTTP_ERROR_MESSAGE = "요청을 처리할 수 없습니다."
-_VALIDATION_ERROR_MESSAGE = "요청 형식이 올바르지 않습니다."
-_INTERNAL_ERROR_MESSAGE = "서버에서 예상하지 못한 문제가 생겼습니다."
+
+# OpenAPI 문서에 싣는 검증 실패 응답(400)의 스키마. 실제 응답과 같은 모양이다.
+_VALIDATION_ERROR_SCHEMA = "ValidationErrorResponse"
+_VALIDATION_ERROR_DETAIL_SCHEMA = "ValidationErrorDetail"
+_SCHEMA_REF = "#/components/schemas/"
+_OPENAPI_SCHEMAS: dict[str, dict[str, Any]] = {
+    _VALIDATION_ERROR_DETAIL_SCHEMA: {
+        "title": _VALIDATION_ERROR_DETAIL_SCHEMA,
+        "type": "object",
+        "properties": {
+            "field": {"title": "Field", "type": "string"},
+            "reason": {"title": "Reason", "type": "string"},
+        },
+        "required": ["field", "reason"],
+    },
+    _VALIDATION_ERROR_SCHEMA: {
+        "title": _VALIDATION_ERROR_SCHEMA,
+        "type": "object",
+        "properties": {
+            "code": {"title": "Code", "type": "string", "const": "VALIDATION_ERROR"},
+            "message": {"title": "Message", "type": "string"},
+            "detail": {
+                "title": "Detail",
+                "type": "array",
+                "items": {"$ref": _SCHEMA_REF + _VALIDATION_ERROR_DETAIL_SCHEMA},
+            },
+        },
+        "required": ["code", "message", "detail"],
+    },
+}
+# FastAPI가 기본으로 싣는 검증 실패(422)의 스키마. 이 서버는 그 형식으로 응답하지 않는다.
+_FASTAPI_VALIDATION_SCHEMAS = ("HTTPValidationError", "ValidationError")
 
 # 요청 검증 오류의 위치(loc)에서 첫 요소로 오는 값. 필드 이름에는 넣지 않는다.
 _REQUEST_LOCATIONS = frozenset({"body", "query", "path", "header", "cookie"})
@@ -54,6 +92,48 @@ def register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(StarletteHTTPException, _handle_http_exception)
     # Exception에 건 처리기는 Starlette가 가장 바깥의 ServerErrorMiddleware에서 부른다.
     app.add_exception_handler(Exception, _handle_unhandled_exception)
+    # 위 처리기는 검증 실패를 422가 아니라 400으로 바꾼다. OpenAPI 문서도 그에 맞춘다.
+    # 프론트엔드가 이 문서에서 타입을 만들기 때문이다(docs/API.md 1절).
+    app.openapi = _openapi_with_error_format(app.openapi)
+
+
+def _openapi_with_error_format(
+    generate: Callable[[], dict[str, Any]],
+) -> Callable[[], dict[str, Any]]:
+    """FastAPI가 만든 OpenAPI 문서에서 검증 실패의 422를 공통 에러 형식의 400으로 바꾼다.
+
+    FastAPI는 문서를 한 번 만들어 두고 같은 객체를 돌려주므로, 여러 번 고쳐도 결과가 같게 쓴다.
+    """
+
+    def openapi() -> dict[str, Any]:
+        document = generate()
+        replaced = False
+        for operations in document.get("paths", {}).values():
+            for operation in operations.values():
+                responses = operation.get("responses", {})
+                if "422" not in responses:
+                    continue
+                del responses["422"]
+                responses.setdefault(
+                    "400",
+                    {
+                        "description": _VALIDATION_ERROR_MESSAGE,
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": _SCHEMA_REF + _VALIDATION_ERROR_SCHEMA}
+                            }
+                        },
+                    },
+                )
+                replaced = True
+        if replaced:
+            schemas = document.setdefault("components", {}).setdefault("schemas", {})
+            for name in _FASTAPI_VALIDATION_SCHEMAS:
+                schemas.pop(name, None)
+            schemas.update(_OPENAPI_SCHEMAS)
+        return document
+
+    return openapi
 
 
 def _error_response(
@@ -92,12 +172,27 @@ def _field_name(loc: Sequence[object]) -> str:
     return ".".join(str(part) for part in parts)
 
 
-async def _handle_http_exception(request: Request, exc: Exception) -> JSONResponse:
+async def _handle_http_exception(request: Request, exc: Exception) -> Response:
     error = cast(StarletteHTTPException, exc)
     status_code = error.status_code
-    code, message = _HTTP_ERRORS.get(
-        status_code, (HTTPStatus(status_code).name, _OTHER_HTTP_ERROR_MESSAGE)
-    )
+    # 204, 205, 304와 1xx의 응답에는 본문이 있으면 안 된다. 본문을 붙이면 서버가 응답을 끊는다.
+    if not is_body_allowed_for_status_code(status_code):
+        return Response(status_code=status_code, headers=error.headers)
+    if status_code in _HTTP_ERRORS:
+        code, message = _HTTP_ERRORS[status_code]
+    else:
+        try:
+            code, message = HTTPStatus(status_code).name, _OTHER_HTTP_ERROR_MESSAGE
+        except ValueError:
+            # 499처럼 HTTP 표준에 이름이 없는 상태는 code를 정할 수 없다. 던진 코드의 잘못이므로
+            # 예상하지 못한 문제로 응답하고, 무엇을 던졌는지 로그에 남긴다.
+            logger.error(
+                "이름이 없는 HTTP 상태의 예외: %s %s → %s",
+                request.method,
+                request.url.path,
+                status_code,
+            )
+            return _error_response(500, "INTERNAL_ERROR", _INTERNAL_ERROR_MESSAGE)
     # 예외의 detail은 응답에 담지 않는다. 영어 원문("Not Found")이거나
     # 던진 쪽의 내부 사정일 수 있다. 405의 Allow처럼 예외가 함께 실은 헤더는 그대로 보낸다.
     return _error_response(status_code, code, message, headers=error.headers)
