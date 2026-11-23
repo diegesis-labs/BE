@@ -18,7 +18,7 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
 | API 기본 경로와 로컬 포트 | 모든 경로에 `/api` 접두사를 붙이고, 로컬 개발 서버는 `8080` 포트를 씁니다. 프론트엔드의 현재 설정과 같으므로 고칠 것이 없습니다. |
 | 인증 방식 | 쿠키 방식을 씁니다. 백엔드가 Google 로그인을 처리한 다음, 스크립트가 읽을 수 없는 쿠키를 브라우저에 심습니다. 프론트엔드는 지금처럼 `credentials: 'include'`로 요청하면 됩니다. |
 | 에러 응답 형식 | `{ "code", "message", "detail" }` 형식을 씁니다. 자세한 내용은 아래 2.3절에 있습니다. |
-| API 스펙 공유 방식 | 서버가 `/api/openapi.json`으로 OpenAPI 문서를 제공합니다. 프론트엔드는 이 문서에서 TypeScript 타입을 자동으로 생성할 수 있습니다. |
+| API 스펙 공유 방식 | 서버가 `/api/openapi.json`으로 OpenAPI 문서를 제공합니다. 프론트엔드는 이 문서에서 TypeScript 타입을 자동으로 생성할 수 있으며, 같은 내용을 브라우저에서 `/api/docs`로 볼 수 있습니다. |
 | 헬스체크 엔드포인트 | `GET /api/health`이며, `{ "status": "ok" }`를 응답합니다. |
 
 ## 2. 공통 규칙
@@ -50,6 +50,16 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
   "code": "VALIDATION_ERROR",
   "message": "요청 형식이 올바르지 않습니다.",
   "detail": [{ "field": "first_sentence", "reason": "0 이상의 정수여야 합니다." }]
+}
+```
+
+검증 오류(`VALIDATION_ERROR`)의 `detail`은 `{ "field", "reason" }`의 목록이며, 두 값은 언제나 문자열입니다. `field`는 잘못된 필드의 이름이고, 안쪽의 필드는 점으로 잇습니다. 예를 들어 `item.price`와 같으며, 목록 안의 항목은 `extras.0.price`처럼 순번을 넣습니다. 본문이 JSON으로 읽히지 않거나 본문 전체의 모양이 틀려서 특정 필드를 가리킬 수 없으면 `field`는 빈 문자열 `""`입니다.
+
+```json
+{
+  "code": "VALIDATION_ERROR",
+  "message": "요청 형식이 올바르지 않습니다.",
+  "detail": [{ "field": "", "reason": "JSON decode error" }]
 }
 ```
 
