@@ -4,6 +4,7 @@
 이 파일은 마이그레이션 서비스(`migrate`)와 서버 서비스(`api`)를 본다.
 """
 
+import shlex
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -99,6 +100,22 @@ def test_migrate_starts_after_db_is_healthy() -> None:
     assert depends_on_condition("migrate", "db") == "service_healthy"
     # service_healthy는 db에 healthcheck가 있어야 뜻이 있다.
     assert service("db").get("healthcheck"), "db에 healthcheck가 없다"
+
+
+def test_db_healthcheck_checks_tcp_connection() -> None:
+    # 첫 초기화 중에 이미지의 entrypoint가 띄우는 임시 서버는 유닉스 소켓만 열고 TCP는 열지 않는다.
+    # 소켓만 보면 그때 healthy가 되고, TCP로 붙는 migrate가 거부당해 실패할 수 있다.
+    healthcheck = service("db").get("healthcheck") or {}
+    test = healthcheck.get("test")
+    assert isinstance(test, list) and test[:1] == ["CMD-SHELL"], f"healthcheck의 형식: {test!r}"
+    words = shlex.split(" ".join(str(word) for word in test[1:]))
+    assert words[:1] == ["pg_isready"], words
+    pairs = zip(words, words[1:], strict=False)
+    hosts = [value for flag, value in pairs if flag in {"-h", "--host"}]
+    hosts += [word.split("=", 1)[1] for word in words if word.startswith("--host=")]
+    assert hosts, f"pg_isready가 호스트를 받지 않아 유닉스 소켓만 본다: {words}"
+    # 경로(/로 시작)를 주면 여전히 유닉스 소켓이다.
+    assert all(host in {"127.0.0.1", "localhost", "::1"} for host in hosts), hosts
 
 
 def test_api_starts_after_migrate_completed_successfully() -> None:

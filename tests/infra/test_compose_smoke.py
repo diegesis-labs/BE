@@ -133,6 +133,10 @@ if args[:1] != ["compose"]:
 rest = args[1:]
 while rest[:1] in (["-p"], ["-f"], ["--env-file"]):
     rest = rest[2:]
+if rest[:1] == ["up"] and os.environ.get("FAKE_LOCK_DIR"):
+    # 스택을 띄우는 동안 스크립트가 잠금을 쥐고 있는지 기록한다.
+    with open(os.environ["FAKE_LOCK_LOG"], "a", encoding="utf-8") as log:
+        log.write(("held" if os.path.isdir(os.environ["FAKE_LOCK_DIR"]) else "free") + "\\n")
 if rest[:1] in (["down"], ["up"]):
     sys.exit(0)
 if rest[:4] == ["ps", "--all", "--quiet", "migrate"]:
@@ -372,6 +376,91 @@ def test_script_fails_when_env_file_is_in_workdir(tmp_path: Path) -> None:
     assert run.returncode != 0, run.output
     assert "스모크 실패: (5)" in run.output, run.output
     assert "스모크 통과" not in run.output
+
+
+@pytest.mark.parametrize(
+    "location",
+    [
+        "app/app/.env",
+        "usr/local/lib/python3/.env",
+        "root/.env",
+    ],
+)
+def test_script_fails_when_env_file_is_anywhere_in_image(tmp_path: Path, location: str) -> None:
+    # TC-0.5.1 (5)는 작업 폴더가 아니라 api 이미지 전체에 .env가 없는지를 본다.
+    image_root = make_fake_image(tmp_path)
+    env_file = image_root / location
+    env_file.parent.mkdir(parents=True, exist_ok=True)
+    env_file.write_text("DATABASE_URL=x\n", encoding="utf-8")
+
+    run = run_against_fake_stack(tmp_path, image_root)
+
+    assert run.returncode != 0, run.output
+    assert "스모크 실패: (5)" in run.output, run.output
+    assert location in run.output, "어디에서 .env를 찾았는지 알리지 않는다"
+    assert "스모크 통과" not in run.output
+
+
+# --- 스모크 두 개가 겹치지 않는다 ------------------------------------------------
+# 모든 worktree가 같은 프로젝트 이름(diegesis-smoke)을 쓰므로, 겹쳐 돌면 서로의 컨테이너와 볼륨을
+# 지운다. 스크립트는 임시 폴더(TMPDIR)에 잠금 폴더를 만들어 한 번에 하나만 돌게 한다.
+
+
+def lock_dir(tmp_path: Path) -> Path:
+    return tmp_path / "tmp" / f"{PROJECT}.lock"
+
+
+def lock_env(tmp_path: Path) -> dict[str, str]:
+    return {"FAKE_LOCK_DIR": str(lock_dir(tmp_path)), "FAKE_LOCK_LOG": str(tmp_path / "lock.log")}
+
+
+def test_script_holds_the_lock_while_running_and_releases_it(tmp_path: Path) -> None:
+    run = run_against_fake_stack(tmp_path, make_fake_image(tmp_path), lock_env(tmp_path))
+
+    assert run.returncode == 0, run.output
+    assert (tmp_path / "lock.log").read_text(encoding="utf-8").splitlines() == ["held"]
+    assert not lock_dir(tmp_path).exists(), "끝난 뒤에도 잠금이 남았다"
+
+
+def test_script_releases_the_lock_when_a_check_fails(tmp_path: Path) -> None:
+    env = {**lock_env(tmp_path), "FAKE_API_UIDS": "0 0 0 0"}
+
+    run = run_against_fake_stack(tmp_path, make_fake_image(tmp_path), env)
+
+    assert run.returncode != 0, run.output
+    assert (tmp_path / "lock.log").read_text(encoding="utf-8").splitlines() == ["held"]
+    assert not lock_dir(tmp_path).exists(), "실패한 뒤에 잠금이 남았다"
+
+
+def test_script_refuses_while_another_smoke_holds_the_lock(tmp_path: Path) -> None:
+    lock = lock_dir(tmp_path)
+    lock.mkdir(parents=True)
+    # 살아 있는 프로세스(이 테스트)가 잠금을 쥐고 있다.
+    holder = f"{os.getpid()}\n"
+    (lock / "pid").write_text(holder, encoding="utf-8")
+
+    run = run_against_fake_stack(tmp_path, make_fake_image(tmp_path), lock_env(tmp_path))
+
+    assert run.returncode != 0, run.output
+    assert str(os.getpid()) in run.output, "누가 잠금을 쥐고 있는지 알리지 않는다"
+    # 다른 스모크의 컨테이너와 볼륨을 건드리지 않고, 그 잠금도 지우지 않는다.
+    assert compose_calls(run.calls) == [], run.calls
+    assert (lock / "pid").read_text(encoding="utf-8") == holder
+
+
+def test_script_takes_over_a_lock_left_by_a_dead_smoke(tmp_path: Path) -> None:
+    # kill -9처럼 정리할 틈 없이 끝난 스모크가 남긴 잠금이다. 그 프로세스는 이미 없다.
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    lock = lock_dir(tmp_path)
+    lock.mkdir(parents=True)
+    (lock / "pid").write_text(f"{dead.pid}\n", encoding="utf-8")
+
+    run = run_against_fake_stack(tmp_path, make_fake_image(tmp_path), lock_env(tmp_path))
+
+    assert run.returncode == 0, run.output
+    assert (tmp_path / "lock.log").read_text(encoding="utf-8").splitlines() == ["held"]
+    assert not lock.exists()
 
 
 # --- TC-0.5.5: .gitattributes -----------------------------------------------

@@ -9,6 +9,7 @@
 import logging
 import re
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -231,9 +232,13 @@ def test_app_error_without_detail_omits_the_detail_key(client: TestClient) -> No
 @pytest.mark.parametrize(
     ("status_code", "code"),
     [
+        # 표에 있는 상태는 표의 code를 쓴다. FastAPI는 본문을 해석하지 못하면 스스로 400을 던진다.
+        (400, "VALIDATION_ERROR"),
         (401, "NOT_AUTHENTICATED"),
         (404, "NOT_FOUND"),
         (405, "METHOD_NOT_ALLOWED"),
+        (500, "INTERNAL_ERROR"),
+        # 표에 없는 상태는 HTTP 상태의 영문 이름을 쓴다.
         (409, "CONFLICT"),
         (429, "TOO_MANY_REQUESTS"),
     ],
@@ -249,3 +254,72 @@ def test_http_exception_is_converted_to_error_format(
     assert body["code"] == code
     assert_korean_sentence(body["message"])
     assert RAW_HTTP_DETAIL not in response.text
+
+
+@pytest.mark.parametrize("source", ["fastapi-http", "starlette-http"])
+def test_http_exception_with_unnamed_status_is_an_internal_error(
+    client: TestClient, source: str
+) -> None:
+    # 499처럼 HTTP 표준에 이름이 없는 상태는 처리기가 code를 정할 수 없다. 던진 코드의 잘못이므로
+    # 예상하지 못한 문제(500, INTERNAL_ERROR)로 응답한다. 처리기 자신이 예외를 내면 안 된다.
+    # client는 서버의 예외를 테스트로 다시 던지므로, 처리기가 터지면 여기서 실패한다.
+    response = client.get(f"/test/{source}/499")
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "code": "INTERNAL_ERROR",
+        "message": "서버에서 예상하지 못한 문제가 생겼습니다.",
+    }
+
+
+@pytest.mark.parametrize("source", ["fastapi-http", "starlette-http"])
+@pytest.mark.parametrize("status_code", [204, 205, 304])
+def test_http_exception_without_body_status_has_no_body(
+    client: TestClient, source: str, status_code: int
+) -> None:
+    # 이 상태들의 응답에는 본문이 있으면 안 된다(RFC 9110). 본문을 붙이면 서버가 응답을 끊는다.
+    response = client.get(f"/test/{source}/{status_code}")
+
+    assert response.status_code == status_code
+    assert response.content == b""
+
+
+# --- OpenAPI 문서의 검증 실패 응답 (docs/API.md 1절, 2.3절) -------------------------
+
+
+def schema_of(document: dict[str, Any], response: dict[str, Any]) -> dict[str, Any]:
+    ref = response["content"]["application/json"]["schema"]["$ref"]
+    assert ref.startswith("#/components/schemas/"), ref
+    return document["components"]["schemas"][ref.removeprefix("#/components/schemas/")]
+
+
+def test_openapi_documents_validation_failure_as_400_in_error_format(client: TestClient) -> None:
+    # 프론트엔드는 이 문서에서 타입을 만든다. 실제 응답(400, {code, message, detail})과 같아야 한다.
+    document = client.get("/api/openapi.json").json()
+
+    for path, operations in document["paths"].items():
+        for method, operation in operations.items():
+            assert "422" not in operation["responses"], f"{method.upper()} {path}에 422가 있다"
+    schemas = document["components"]["schemas"]
+    assert "HTTPValidationError" not in schemas
+    assert "ValidationError" not in schemas
+
+    actual = client.get("/test/items", params={"limit": "not-a-number"}).json()
+    for path, method in (("/test/items", "get"), ("/test/orders", "post")):
+        error = schema_of(document, document["paths"][path][method]["responses"]["400"])
+        assert set(error["properties"]) == set(actual) == {"code", "message", "detail"}
+        assert set(error["required"]) == {"code", "message", "detail"}
+        assert error["properties"]["code"]["type"] == "string"
+        assert error["properties"]["message"]["type"] == "string"
+        items = error["properties"]["detail"]
+        assert items["type"] == "array"
+        item_ref = items["items"]["$ref"].removeprefix("#/components/schemas/")
+        item = schemas[item_ref]
+        assert set(item["properties"]) == set(actual["detail"][0]) == {"field", "reason"}
+        assert set(item["required"]) == {"field", "reason"}
+
+
+def test_openapi_does_not_add_400_to_operations_without_input(client: TestClient) -> None:
+    document = client.get("/api/openapi.json").json()
+
+    assert set(document["paths"]["/api/health"]["get"]["responses"]) == {"200"}

@@ -100,7 +100,9 @@ def test_docs_page_is_served_under_api(client: TestClient) -> None:
     assert "/api/openapi.json" in response.text
 
 
-@pytest.mark.parametrize("path", ["/openapi.json", "/docs", "/redoc"])
+# /docs/oauth2-redirect는 문서 화면의 OAuth2 로그인이 돌아오는 경로다. FastAPI는 docs_url과 별개로
+# 이 경로를 기본값으로 연다. 이 서버는 문서 화면에서 OAuth2 로그인을 쓰지 않는다.
+@pytest.mark.parametrize("path", ["/openapi.json", "/docs", "/redoc", "/docs/oauth2-redirect"])
 def test_default_documentation_paths_are_closed(client: TestClient, path: str) -> None:
     response = client.get(path)
 
