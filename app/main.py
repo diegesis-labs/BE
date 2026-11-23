@@ -7,16 +7,21 @@
 
 from fastapi import FastAPI
 
+from app.core.errors import register_error_handlers
+
 
 def create_app() -> FastAPI:
     # 모든 경로에 /api 접두사를 붙인다(docs/API.md 1절).
     # 문서도 그 아래에 두고, 기본 경로(/openapi.json, /docs, /redoc)는 열지 않는다.
-    return FastAPI(
+    app = FastAPI(
         title="Diegesis BE",
         openapi_url="/api/openapi.json",
         docs_url="/api/docs",
         redoc_url=None,
     )
+    # 모든 에러 응답을 {code, message, detail} 형식으로 바꾼다(docs/API.md 2.3절).
+    register_error_handlers(app)
+    return app
 
 
 app = create_app()
