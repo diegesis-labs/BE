@@ -13,7 +13,7 @@ Epic 하나는 GitHub 이슈 하나와 짝을 이룹니다. 이슈는 팀이 진
 
 | 번호 | Epic | 목표 | GitHub 이슈 | 문서 | 상태 |
 | --- | --- | --- | --- | --- | --- |
-| 0 | project-setup | 비즈니스 로직 없이 개발 환경을 세팅하고, harness 워크플로우가 처음부터 `main` 병합과 이미지 push까지 동작하는지 확인한다. | #4 | [`epic-0/E0-project-setup.md`](epic-0/E0-project-setup.md) | 진행 중 |
+| 0 | project-setup | 비즈니스 로직 없이 개발 환경을 세팅하고, harness 워크플로우가 처음부터 `main` 병합과 이미지 push까지 동작하는지 확인한다. | #4 | [`epic-0/E0-project-setup.md`](epic-0/E0-project-setup.md) | 완료 |
 
 문서 칸에는 Epic 문서로 가는 링크를 겁니다. 상태는 `준비 중`, `진행 중`, `완료` 가운데 하나로 적습니다. PR이 `main`에 합쳐졌을 때 `완료`로 바꿉니다.
 
