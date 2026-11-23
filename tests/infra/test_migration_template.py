@@ -39,6 +39,11 @@ def test_new_revision_passes_ruff(
     # 그러면 따옴표가 값에 남고, ruff가 그 값을 거부해도 alembic은 실패를 무시한다.
     # 그 나누기를 흉내 낸다.
     monkeypatch.setattr(compat, "is_posix", posix)
+    # 레포 밖의 작업 경로에서 만든다. 훅은 설정 파일을 레포 최상위 기준의 상대 경로로 넘기므로,
+    # 훅이 레포 최상위에서 돌지 않으면 그 파일을 찾지 못한다.
+    workdir = tmp_path / "elsewhere"
+    workdir.mkdir()
+    monkeypatch.chdir(workdir)
     path = new_revision(tmp_path)
 
     result = subprocess.run(
