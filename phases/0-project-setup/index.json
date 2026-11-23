@@ -37,7 +37,10 @@
     {
       "step": 4,
       "name": "container",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-11-23T11:37:51+0900",
+      "summary": "멀티 스테이지 Dockerfile(python:<.python-version>-slim 두 단계, ghcr.io/astral-sh/uv:0.12.6에서 uv 복사, uv sync --locked --no-dev --no-install-project, 실행 단계는 가상환경·app/·migrations/·alembic.ini만 복사, USER 10001:10001, EXPOSE 8080, CMD [\"python\",\"-m\",\"app\"]), .env·.env.*·.venv·.git·phases·docs·tests·scripts·var·캐시를 빼는 .dockerignore, *.sh text eol=lf의 .gitattributes, compose.yaml에 migrate(build ., alembic upgrade head, db healthy 뒤, DATABASE_URL 호스트 db)와 api(build ., migrate 성공 뒤, ${API_PORT:-8080}:8080, python urllib로 /api/health를 부르는 healthcheck, 같은 DATABASE_URL)를 더하고, scripts/compose-smoke.sh(readonly PROJECT=diegesis-smoke·인자 거부·-p 고정, --env-file /dev/null, API_PORT=DB_PORT=0으로 Docker가 빈 포트 선택, up --build --wait로 compose만 빌드, migrate exited 0·pg_extension의 vector·호스트 /api/health 본문 == {\"status\":\"ok\"}·PID 1의 uid 넷 모두 ≠0·작업 폴더 .env 없음을 확인, 실패 시 항목과 compose 로그 끝부분 출력, trap으로 down --volumes --remove-orphans --rmi local)를 두었다. RED 커밋 뒤 tests/infra/에 TC-0.5.2~0.5.5 테스트 54개(가짜 docker를 앞세워 COMPOSE_PROJECT_NAME 등을 바꿔도 모든 compose 호출이 -p diegesis-smoke인지 실행으로 확인, api와 migrate의 DATABASE_URL이 같은지도 확인)를 두고 반증 조건 전부가 빨개지는 것을 확인했다. 스모크는 실제로 통과(약 45초)했고, migrate의 호스트를 틀리면 종료 코드 1로 끝났다. 메모: api의 DATABASE_URL만 틀리면 서버가 데이터베이스에 접속하지 않으므로(D-39) 스모크는 초록이다 — 그 경우는 단위 테스트(호스트 db, migrate와 같은 주소)가 잡는다",
+      "completed_at": "2026-11-23T11:51:24+0900"
     },
     {
       "step": 5,

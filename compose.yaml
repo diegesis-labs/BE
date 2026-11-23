@@ -1,4 +1,5 @@
-# 로컬에서 데이터베이스를 띄운다. 마이그레이션과 서버 서비스는 Epic 0의 step 4가 더한다.
+# 로컬에서 데이터베이스, 마이그레이션, 서버를 함께 띄운다. 처음 받은 레포에서 `docker compose up --build`
+# 하나로 동작한다. 서버 이미지는 레지스트리에서 받지 않고 이 레포에서 빌드한다(docs/DECISIONS.md의 D-37).
 #
 # - `platform:`과 `env_file`을 적지 않는다. 각 컴퓨터가 자기 CPU 아키텍처의 이미지를 쓰고,
 #   개발자의 `.env`에 든 주소가 컨테이너 안의 주소를 덮어쓰면 안 되기 때문이다.
@@ -23,6 +24,40 @@ services:
       - db-data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U diegesis -d diegesis"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  # 서버와 같은 이미지로 마이그레이션을 한 번 실행하고 멈춘다(docs/DECISIONS.md의 D-40).
+  # 서버가 시작할 때마다 실행하면, 서버가 여러 개 뜰 때 마이그레이션이 동시에 돌 수 있다.
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      # 컨테이너 안에서는 db 서비스의 이름으로 닿는다. localhost는 그 컨테이너 자신이다.
+      DATABASE_URL: postgresql+asyncpg://diegesis:diegesis@db:5432/diegesis
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+asyncpg://diegesis:diegesis@db:5432/diegesis
+    ports:
+      # 8080을 다른 프로그램이 쓰고 있으면 API_PORT로 바꾼다.
+      - "${API_PORT:-8080}:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    # `docker compose up --wait`가 서버가 응답할 때까지 기다리게 한다.
+    # 이미지에 curl이 없으므로 python으로 부른다. 닿지 않거나 오류 응답이면 예외로 끝나 실패로 판정된다.
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=2)"
       interval: 2s
       timeout: 5s
       retries: 30

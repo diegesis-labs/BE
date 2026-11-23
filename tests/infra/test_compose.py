@@ -84,6 +84,14 @@ def test_database_url_points_to_db_service(name: str) -> None:
     assert parts.scheme == "postgresql+asyncpg"
 
 
+def test_api_and_migrate_share_the_same_database_url() -> None:
+    # 서버는 시작할 때 데이터베이스에 접속하지 않고, /api/health도 데이터베이스를 보지 않는다.
+    # 서버와 데이터베이스의 연결은 스모크가 서버 이미지로 실행한 migrate의 성공으로 확인한다
+    # (docs/DECISIONS.md의 D-39). 그 확인은 두 서비스의 주소가 같을 때에만 api에도 성립한다.
+    # api의 주소만 틀리면 스모크는 초록이므로, 여기서 걸러야 한다.
+    assert environment("api").get("DATABASE_URL") == environment("migrate").get("DATABASE_URL")
+
+
 # --- TC-0.5.4: 시작 순서 ----------------------------------------------------
 
 

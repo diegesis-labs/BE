@@ -1,0 +1,2 @@
+# Windows의 git이 셸 스크립트를 CRLF로 받으면 `bash\r` 오류로 깨진다. 어느 컴퓨터에서 받든 LF로 둔다.
+*.sh text eol=lf
