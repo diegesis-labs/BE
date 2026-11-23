@@ -14,6 +14,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from alembic.script import Script
+from alembic.util import compat
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ALEMBIC_INI = REPO_ROOT / "alembic.ini"
@@ -30,7 +31,14 @@ def new_revision(tmp_path: Path) -> Path:
 
 
 @pytest.mark.parametrize("ruff_args", [["check"], ["format", "--check"]], ids=["check", "format"])
-def test_new_revision_passes_ruff(tmp_path: Path, ruff_args: list[str]) -> None:
+@pytest.mark.parametrize("posix", [True, False], ids=["posix", "windows-split"])
+def test_new_revision_passes_ruff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ruff_args: list[str], posix: bool
+) -> None:
+    # Windows의 네이티브 파이썬에서 alembic은 훅의 options를 shlex.split(posix=False)로 나눈다.
+    # 그러면 따옴표가 값에 남고, ruff가 그 값을 거부해도 alembic은 실패를 무시한다.
+    # 그 나누기를 흉내 낸다.
+    monkeypatch.setattr(compat, "is_posix", posix)
     path = new_revision(tmp_path)
 
     result = subprocess.run(

@@ -564,19 +564,84 @@ def test_script_gives_up_when_another_smoke_gets_the_lock_during_takeover(
     assert current == holder, "다른 스모크의 잠금을 덮었다"
 
 
-def test_script_takes_over_a_lock_left_by_a_dead_smoke(tmp_path: Path) -> None:
-    # kill -9처럼 정리할 틈 없이 끝난 스모크가 남긴 잠금이다. 그 프로세스는 이미 없다.
-    dead = subprocess.Popen([sys.executable, "-c", "pass"])
-    dead.wait()
+# 가짜 cat. 잠금의 pid를 처음 읽어 준 바로 뒤에, 같은 낡은 잠금을 본 다른 스모크가 먼저
+# 넘겨받는 것을 흉내 낸다(한 번만). 그 스모크는 살아 있는 프로세스(FAKE_RACE_HOLDER)다.
+FAKE_CAT_THEN_OTHER_TAKES_OVER = """#!/bin/sh
+/bin/cat "$@"
+status=$?
+if [ "$1" = "$FAKE_LOCK_DIR/pid" ] && [ ! -e "$FAKE_RACE_DONE" ]; then
+  : >"$FAKE_RACE_DONE"
+  /bin/rm -f "$FAKE_LOCK_DIR/pid"
+  /bin/rmdir "$FAKE_LOCK_DIR"
+  /bin/mkdir "$FAKE_LOCK_DIR" && echo "$FAKE_RACE_HOLDER" >"$FAKE_LOCK_DIR/pid"
+fi
+exit $status
+"""
+
+
+def takeover_dir(tmp_path: Path) -> Path:
+    """낡은 잠금을 넘겨받는 동안 쥐는 두 번째 잠금. 넘겨받기를 한 번에 하나만 하게 한다."""
+    return tmp_path / "tmp" / f"{PROJECT}.lock.takeover"
+
+
+def test_script_does_not_take_over_a_lock_another_smoke_just_took_over(tmp_path: Path) -> None:
+    # 두 스모크가 같은 낡은 잠금(죽은 pid)을 함께 보았고, 다른 쪽이 먼저 넘겨받았다. 이쪽이
+    # 그대로 넘겨받으면 다른 쪽의 pid 파일을 지우고 잠금을 다시 만들어, 둘이 함께 잠금을 쥐고
+    # 같은 프로젝트의 컨테이너와 볼륨을 서로 지운다.
     lock = lock_dir(tmp_path)
     lock.mkdir(parents=True)
-    (lock / "pid").write_text(f"{dead.pid}\n", encoding="utf-8")
+    (lock / "pid").write_text(f"{dead_pid()}\n", encoding="utf-8")
+    holder = str(os.getpid())
+    env = {
+        **lock_env(tmp_path),
+        "FAKE_RACE_DONE": str(tmp_path / "race-done"),
+        "FAKE_RACE_HOLDER": holder,
+    }
+
+    run = run_against_fake_stack(
+        tmp_path,
+        make_fake_image(tmp_path),
+        env,
+        extra_bin={"cat": FAKE_CAT_THEN_OTHER_TAKES_OVER},
+    )
+
+    assert (tmp_path / "race-done").exists(), "잠금의 pid를 cat으로 읽지 않았다"
+    assert run.returncode != 0, run.output
+    assert compose_calls(run.calls) == [], run.calls
+    current = (lock / "pid").read_text(encoding="utf-8").strip()
+    assert current == holder, "먼저 넘겨받은 스모크의 잠금을 덮었다"
+    assert not takeover_dir(tmp_path).exists(), "넘겨받기 잠금을 풀지 않았다"
+
+
+def test_script_refuses_while_another_smoke_is_taking_over_the_lock(tmp_path: Path) -> None:
+    # 다른 스모크가 같은 낡은 잠금을 넘겨받는 중이다(넘겨받기 잠금을 쥐고 있다).
+    # 기다리지 않고 멈추며, 그 스모크의 잠금들을 건드리지 않는다.
+    lock = lock_dir(tmp_path)
+    lock.mkdir(parents=True)
+    dead = f"{dead_pid()}\n"
+    (lock / "pid").write_text(dead, encoding="utf-8")
+    takeover_dir(tmp_path).mkdir()
+
+    run = run_against_fake_stack(tmp_path, make_fake_image(tmp_path), lock_env(tmp_path))
+
+    assert run.returncode != 0, run.output
+    assert compose_calls(run.calls) == [], run.calls
+    assert (lock / "pid").read_text(encoding="utf-8") == dead
+    assert takeover_dir(tmp_path).is_dir()
+
+
+def test_script_takes_over_a_lock_left_by_a_dead_smoke(tmp_path: Path) -> None:
+    # kill -9처럼 정리할 틈 없이 끝난 스모크가 남긴 잠금이다. 그 프로세스는 이미 없다.
+    lock = lock_dir(tmp_path)
+    lock.mkdir(parents=True)
+    (lock / "pid").write_text(f"{dead_pid()}\n", encoding="utf-8")
 
     run = run_against_fake_stack(tmp_path, make_fake_image(tmp_path), lock_env(tmp_path))
 
     assert run.returncode == 0, run.output
     assert (tmp_path / "lock.log").read_text(encoding="utf-8").splitlines() == ["held"]
     assert not lock.exists()
+    assert not takeover_dir(tmp_path).exists(), "넘겨받기 잠금을 풀지 않았다"
 
 
 # --- TC-0.5.5: .gitattributes -----------------------------------------------

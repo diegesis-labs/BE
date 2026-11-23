@@ -292,6 +292,43 @@ def test_http_exception_with_unnamed_status_is_an_internal_error(
 
 
 @pytest.mark.parametrize("source", ["fastapi-http", "starlette-http"])
+@pytest.mark.parametrize("status_code", [500, 503, 499])
+def test_http_exception_answered_as_server_error_is_logged_with_its_stack(
+    client: TestClient, caplog: pytest.LogCaptureFixture, source: str, status_code: int
+) -> None:
+    # 코드가 직접 던진 5xx와 이름 없는 상태(499 → 500)는 응답만으로는 처리되지 않은 예외와 구별되지
+    # 않는다. 원인을 찾을 수 있게 무엇을 어디서 던졌는지를 서버 로그에 스택과 함께 남긴다.
+    with caplog.at_level(logging.ERROR, logger="app.core.errors"):
+        response = client.get(f"/test/{source}/{status_code}")
+
+    assert response.status_code >= 500
+    records = error_records(caplog)
+    assert len(records) == 1, records
+    message = records[0].getMessage()
+    assert "GET" in message and f"/test/{source}/{status_code}" in message, message
+    assert str(status_code) in message, message
+    assert RAW_HTTP_DETAIL in message, message
+    exc_info = records[0].exc_info
+    assert exc_info is not None, "스택이 남지 않았다"
+    assert isinstance(exc_info[1], StarletteHTTPException)
+    assert exc_info[1].status_code == status_code
+    assert exc_info[2] is not None
+
+
+@pytest.mark.parametrize("source", ["fastapi-http", "starlette-http"])
+@pytest.mark.parametrize("status_code", [400, 404, 409])
+def test_http_exception_answered_as_client_error_is_not_logged_as_error(
+    client: TestClient, caplog: pytest.LogCaptureFixture, source: str, status_code: int
+) -> None:
+    # 4xx는 요청한 쪽의 문제다. 서버 오류 로그에 섞이면 원인을 찾아야 할 기록이 묻힌다.
+    with caplog.at_level(logging.ERROR, logger="app.core.errors"):
+        response = client.get(f"/test/{source}/{status_code}")
+
+    assert response.status_code == status_code
+    assert error_records(caplog) == []
+
+
+@pytest.mark.parametrize("source", ["fastapi-http", "starlette-http"])
 @pytest.mark.parametrize("status_code", [204, 205, 304])
 def test_http_exception_without_body_status_has_no_body(
     client: TestClient, source: str, status_code: int
@@ -337,7 +374,10 @@ def test_openapi_documents_validation_failure_as_400_in_error_format(client: Tes
     for path, method in (("/test/items", "get"), ("/test/orders", "post")):
         error = schema_of(document, document["paths"][path][method]["responses"]["400"])
         assert set(error["properties"]) == set(actual) == {"code", "message", "detail"}
-        assert set(error["required"]) == {"code", "message", "detail"}
+        # detail은 추가 정보가 있을 때에만 들어간다(docs/API.md 2.3절). 같은 400이라도
+        # 본문을 해석하지 못한 HTTP 예외에는 detail이 없다
+        # (test_body_parse_failure_matches_documented_400).
+        assert set(error["required"]) == {"code", "message"}
         assert error["properties"]["code"]["type"] == "string"
         assert error["properties"]["code"]["const"] == actual["code"] == "VALIDATION_ERROR"
         assert error["properties"]["message"]["type"] == "string"
@@ -350,6 +390,27 @@ def test_openapi_documents_validation_failure_as_400_in_error_format(client: Tes
         assert item["properties"]["field"]["type"] == "string"
         assert item["properties"]["reason"]["type"] == "string"
         assert all(isinstance(actual["detail"][0][key], str) for key in ("field", "reason"))
+
+
+def test_body_parse_failure_matches_documented_400(client: TestClient) -> None:
+    # UTF-8이 아닌 본문은 FastAPI가 해석하지 못해 스스로 HTTP 예외 400을 던진다. 그 응답도
+    # 같은 operation의 문서가 적은 400 스키마에 맞아야 한다. 프론트엔드는 그 문서에서 만든
+    # 타입으로 응답을 읽는다.
+    document = client.get("/api/openapi.json").json()
+    response = client.post(
+        "/test/orders",
+        content=b'{"item": {"price": "\xff"}}',
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 400
+    body = response.json()
+    error = schema_of(document, document["paths"]["/test/orders"]["post"]["responses"]["400"])
+    missing = set(error["required"]) - set(body)
+    assert not missing, f"문서가 필수로 적은 키가 응답에 없다: {missing} (응답: {body})"
+    assert set(body) <= set(error["properties"]), body
+    assert body["code"] == error["properties"]["code"]["const"]
+    assert isinstance(body["message"], str)
 
 
 def test_openapi_does_not_add_400_to_operations_without_input(client: TestClient) -> None:

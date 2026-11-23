@@ -146,8 +146,16 @@ def test_api_uses_image_default_command() -> None:
     assert "command" not in service("api")
 
 
-def test_api_publishes_port_8080_through_api_port() -> None:
-    assert service("api").get("ports") == ["${API_PORT:-8080}:8080"]
+def test_api_publishes_port_8080_through_api_port_on_loopback_only() -> None:
+    # 호스트 주소 없이 열면 같은 네트워크의 다른 기기에도 열린다.
+    # 로컬 개발용이므로 이 컴퓨터에만 연다.
+    assert service("api").get("ports") == ["127.0.0.1:${API_PORT:-8080}:8080"]
+
+
+def test_db_publishes_port_5432_through_db_port_on_loopback_only() -> None:
+    # db에는 compose.yaml에 적힌 고정 계정(diegesis/diegesis)으로 누구나 접속할 수 있다.
+    # 뒤 Epic에서 책을 적재하면 본문이 들어가므로, 같은 네트워크의 다른 기기에 열지 않는다.
+    assert service("db").get("ports") == ["127.0.0.1:${DB_PORT:-5432}:5432"]
 
 
 def test_api_healthcheck_calls_health_endpoint() -> None:

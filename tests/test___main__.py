@@ -8,6 +8,7 @@ LOG_LEVEL은 uvicorn의 로그만이 아니라 앱의 로그(`app.*`)에도 걸�
 무엇이 나오는지 본다. 이 테스트 프로세스의 로그 설정은 건드리지 않는다.
 """
 
+import ast
 import os
 import subprocess
 import sys
@@ -16,6 +17,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+ENTRYPOINT = REPO_ROOT / "app" / "__main__.py"
 
 # 진입점을 돌린 뒤, 넘겨받은 로그 설정을 적용하고 앱의 로거로 로그를 남긴다.
 # 진입점이 로그 설정을 넘기지 않으면 uvicorn이 쓰는 기본 설정을 적용한다(uvicorn.run의 기본값).
@@ -100,3 +102,16 @@ def test_uvicorn_logs_are_kept(tmp_path: Path) -> None:
     access_lines = [line for line in output.splitlines() if "/probe-access-path" in line]
     assert access_lines, output
     assert "200" in access_lines[0], access_lines
+
+
+def test_entrypoint_only_runs_uvicorn() -> None:
+    # app/__main__.py는 TDD 가드의 개별 예외라서 테스트를 먼저 요구받지 않는다. 그래서
+    # uvicorn을 실행하는 것 밖의 로직을 두지 않는다(docs/DEVELOPMENT.md 4.2절). 로그 설정은
+    # app/core/log_config.py가 조립하고, 진입점은 그것을 부르기만 한다.
+    tree = ast.parse(ENTRYPOINT.read_text(encoding="utf-8"))
+    definitions = [
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
+    ]
+    assert definitions == [], f"진입점에 정의가 있다: {definitions}"
