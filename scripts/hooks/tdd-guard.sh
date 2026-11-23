@@ -118,6 +118,13 @@ esac
 # 위 규칙으로 덮이지 않는데 단위 테스트를 먼저 쓸 수 없는 파일을 여기에 한 줄씩 더한다.
 # 줄마다 이유를 주석으로 단다. 무인 실행은 이 파일을 고칠 수 없으므로, step을 설계하는
 # 사람이 step 파일과 같은 커밋에 넣는다(.claude/commands/harness.md 원칙 9).
+#
+#   app/__main__.py — `python -m app`으로 uvicorn을 띄우기만 하는 진입점이다. 설정 클래스에서
+#                     포트와 로그 레벨을 읽어 넘길 뿐 판정하는 로직이 없고, 서버가 실제로 뜨는지는
+#                     compose 스모크가 확인한다(Epic 0, phases/0-project-setup/step0.md).
+case "$REL" in
+  app/__main__.py) exit 0 ;;
+esac
 
 # --- 대응 테스트 찾기 ---
 # app/<경로>/<이름>.py → tests/<경로>/test_<이름>.py 또는 tests/<경로>/test_<이름>_*.py

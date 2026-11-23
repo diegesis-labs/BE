@@ -2,7 +2,7 @@
 # Bash Guard — PreToolUse[Bash]
 # OnlineFourCut의 scripts/hooks/bash-guard.sh를 옮긴 것이다. 주석의 Epic 번호는 원본 프로젝트의 사례다.
 # 이 레포에서 더한 것은 5번 이후의 규칙(Docker, Alembic, PostgreSQL, git clean)과
-# 헤드리스 세션의 push·PR 금지다.
+# 헤드리스 세션의 push·PR·이미지 push 금지다.
 # 되돌릴 수 없는 명령을 막는다. 하네스가 --dangerously-skip-permissions로 돌기 때문에
 # 사람이 확인할 기회가 없고, 이 훅이 유일한 방어선이다.
 #
@@ -88,6 +88,16 @@ if [ -n "$HEADLESS" ]; then
   fi
   if has '(^|[^[:alnum:]_])gh[[:space:]]+(pr[[:space:]]+(create|merge|close)|issue[[:space:]]+(create|close)|release[[:space:]]+create)([[:space:]]|$)'; then
     deny "헤드리스 세션은 PR·이슈·릴리스를 만들거나 닫지 않는다(gh)."
+  fi
+  # 컨테이너 이미지는 main에 합쳐진 코드만 CI가 올린다(docs/DECISIONS.md D-36). Docker Hub
+  # 저장소가 공개라서 한번 올라간 이미지는 누구나 받아 간다(D-37). 로그인도 막는다 — 무인
+  # 세션에 레지스트리 자격 증명이 남을 이유가 없다.
+  if has '(^|[^[:alnum:]_./-])docker[[:space:]]+(image[[:space:]]+)?push([[:space:]]|$)' \
+    || has '(^|[^[:alnum:]_./-])docker[[:space:]]+login([[:space:]]|$)' \
+    || has '(^|[^[:alnum:]_./-])docker([[:space:]]+|-)compose[[:space:]]+([^;&|]*[[:space:]])?push([[:space:]]|$)' \
+    || { has '(^|[^[:alnum:]_./-])docker[[:space:]]+(buildx[[:space:]]+)?build([[:space:]]|$)' \
+      && has '(^|[[:space:]])--push([[:space:]=]|$)'; }; then
+    deny "헤드리스 세션은 컨테이너 이미지를 레지스트리에 올리거나 로그인하지 않는다(docker push, docker login, --push). 이미지는 main에 합쳐진 코드만 CI가 올린다."
   fi
 fi
 

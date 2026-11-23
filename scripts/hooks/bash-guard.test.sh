@@ -143,6 +143,22 @@ expect_cmd_env allow 'git commit -m "push 로직 추가"' HARNESS_RUN=1    "커�
 expect_cmd_env allow 'git push -u origin feat-x'      HARNESS_RUN=     "대화형 세션의 push는 통과"
 expect_cmd_env allow 'gh pr create --fill'            HARNESS_RUN=     "대화형 세션의 PR 생성은 통과"
 
+echo "헤드리스 세션의 이미지 push와 레지스트리 로그인"
+expect_cmd_env deny  'docker push user/diegesis-be:latest'          HARNESS_RUN=1    "이미지 push"
+expect_cmd_env deny  'docker image push user/diegesis-be'           HARNESS_RUN=1    "docker image push"
+expect_cmd_env deny  'docker push x'                                HARNESS_REVIEW=1 "리뷰 세션도"
+expect_cmd_env deny  'echo t | docker login -u u --password-stdin'  HARNESS_RUN=1    "레지스트리 로그인"
+expect_cmd_env deny  'docker compose push'                          HARNESS_RUN=1    "compose push"
+expect_cmd_env deny  'docker compose -p x push api'                 HARNESS_RUN=1    "옵션 뒤의 compose push"
+expect_cmd_env deny  'docker buildx build --push -t u/x .'          HARNESS_RUN=1    "buildx --push"
+expect_cmd_env deny  'docker build -t u/x --push .'                 HARNESS_RUN=1    "build --push"
+expect_cmd_env allow 'docker compose build'                         HARNESS_RUN=1    "compose 빌드는 통과"
+expect_cmd_env allow 'docker compose -p diegesis-smoke up -d --build --wait' HARNESS_RUN=1 "compose up은 통과"
+expect_cmd_env allow 'docker compose logs api'                      HARNESS_RUN=1    "로그 읽기는 통과"
+expect_cmd_env allow 'git commit -m "docker 설정 추가"'             HARNESS_RUN=1    "docker라는 낱말만으로는 막지 않는다"
+expect_cmd_env allow 'docker push user/x'                           HARNESS_RUN=     "대화형 세션의 docker push는 통과"
+expect_cmd_env allow 'docker login'                                 HARNESS_RUN=     "대화형 세션의 로그인은 통과"
+
 echo "jq가 없을 때"
 NOJQ=$(mktemp -d)
 for tool in bash cat grep python3 printf; do
