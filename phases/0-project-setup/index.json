@@ -2,12 +2,43 @@
   "project": "Diegesis BE",
   "phase": "0-project-setup",
   "steps": [
-    { "step": 0, "name": "app-skeleton", "status": "pending" },
-    { "step": 1, "name": "database", "status": "pending" },
-    { "step": 2, "name": "error-format", "status": "pending" },
-    { "step": 3, "name": "health-router", "status": "pending" },
-    { "step": 4, "name": "container", "status": "pending" },
-    { "step": 5, "name": "readme", "status": "pending" },
-    { "step": 6, "name": "ci-workflow", "status": "pending" }
-  ]
+    {
+      "step": 0,
+      "name": "app-skeleton",
+      "status": "completed",
+      "started_at": "2026-11-23T11:07:07+0900",
+      "summary": "fastapi·uvicorn·pydantic-settings(+dev httpx)를 추가하고, PORT·LOG_LEVEL·DATABASE_URL만 읽는 설정 클래스(app/core/config.py, .env의 미선언 값 무시, 환경변수 우선, get_settings 캐시), 설정을 읽지 않는 create_app()(OpenAPI /api/openapi.json, 문서 /api/docs, 기본 경로 닫음), python -m app 진입점(0.0.0.0, 설정의 port·log_level)을 만들고 TC-0.1.1~0.1.5 테스트 25개를 둔다"
+    },
+    {
+      "step": 1,
+      "name": "database",
+      "status": "pending"
+    },
+    {
+      "step": 2,
+      "name": "error-format",
+      "status": "pending"
+    },
+    {
+      "step": 3,
+      "name": "health-router",
+      "status": "pending"
+    },
+    {
+      "step": 4,
+      "name": "container",
+      "status": "pending"
+    },
+    {
+      "step": 5,
+      "name": "readme",
+      "status": "pending"
+    },
+    {
+      "step": 6,
+      "name": "ci-workflow",
+      "status": "pending"
+    }
+  ],
+  "created_at": "2026-11-23T11:07:07+0900"
 }

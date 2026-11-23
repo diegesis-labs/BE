@@ -1,0 +1,16 @@
+"""`python -m app`으로 서버를 띄운다. uvicorn을 실행하는 것 외의 일은 하지 않는다."""
+
+import uvicorn
+
+from app.core.config import get_settings
+
+if __name__ == "__main__":
+    settings = get_settings()
+    uvicorn.run(
+        "app.main:app",
+        # 컨테이너 안에서 바깥의 요청을 받아야 하므로 모든 주소에서 듣는다.
+        host="0.0.0.0",
+        port=settings.port,
+        # uvicorn은 로그 레벨의 이름을 소문자로 받는다.
+        log_level=settings.log_level.lower(),
+    )
