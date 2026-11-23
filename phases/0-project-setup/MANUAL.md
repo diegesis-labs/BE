@@ -16,4 +16,4 @@ GitHub의 secrets와 variable을 등록하려면 BE 레포의 Admin 권한이 �
   `gh secret set DOCKERHUB_USERNAME --repo diegesis-labs/BE`
   `gh secret set DOCKERHUB_TOKEN --repo diegesis-labs/BE`
   `gh variable set DOCKERHUB_IMAGE --repo diegesis-labs/BE --body "<Docker Hub 사용자 이름>/diegesis-be"`
-  관찰한 값:
+  관찰한 값: 2026-11-23, `gh secret list --repo diegesis-labs/BE`에 `DOCKERHUB_USERNAME`(02:14:06Z)과 `DOCKERHUB_TOKEN`(02:14:34Z)이, `gh variable list --repo diegesis-labs/BE`에 `DOCKERHUB_IMAGE`(02:15:53Z)가 보인다. `DOCKERHUB_IMAGE`의 값이 `<사용자 이름>/diegesis-be` 꼴인 것도 확인했다. 값 자체는 D-37에 따라 적지 않는다. 저장소를 공개로 만들고 토큰을 Read & Write로 발급한 것은 체크한 사람이 Docker Hub에서 확인했다.
