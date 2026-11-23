@@ -152,6 +152,29 @@ def test_invalid_nested_body_field_is_named_by_dotted_path_without_location(
         assert isinstance(item["reason"], str) and item["reason"]
 
 
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param(b'{"item": {"price": 1},', id="unparsable-json"),
+        pytest.param(b"[1, 2]", id="body-is-not-an-object"),
+    ],
+)
+def test_body_error_without_a_field_has_empty_field(client: TestClient, content: bytes) -> None:
+    # 특정 필드를 가리킬 수 없는 오류의 field는 빈 문자열이다(API.md 2.3절). 깨진 JSON의 오류
+    # 위치에는 글자 번호가 들어 있어서, 그것을 이름으로 이으면 "12" 같은 없는 필드가 나간다.
+    response = client.post(
+        "/test/orders", content=content, headers={"content-type": "application/json"}
+    )
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["code"] == "VALIDATION_ERROR"
+    assert [item["field"] for item in body["detail"]] == [""]
+    for item in body["detail"]:
+        assert set(item) == {"field", "reason"}
+        assert isinstance(item["reason"], str) and item["reason"]
+
+
 # --- TC-0.3.3 ---------------------------------------------------------------
 
 
