@@ -630,6 +630,41 @@ def test_script_refuses_while_another_smoke_is_taking_over_the_lock(tmp_path: Pa
     assert takeover_dir(tmp_path).is_dir()
 
 
+# 가짜 rm. 잠금의 pid 파일을 지우지 못한다(다른 사용자의 잠금 폴더처럼 권한이 없다).
+FAKE_RM_CANNOT_REMOVE_LOCK_PID = """#!/bin/sh
+for arg in "$@"; do
+  if [ "$arg" = "$FAKE_LOCK_DIR/pid" ]; then
+    echo "rm: $arg: Permission denied" >&2
+    exit 1
+  fi
+done
+exec /bin/rm "$@"
+"""
+
+
+def test_script_releases_takeover_lock_when_it_cannot_remove_the_stale_lock(
+    tmp_path: Path,
+) -> None:
+    # 넘겨받기 잠금을 쥔 채 멈추면, 그 뒤로 낡은 잠금을 만나는 스모크가 모두 멈춘다.
+    lock = lock_dir(tmp_path)
+    lock.mkdir(parents=True)
+    dead = f"{dead_pid()}\n"
+    (lock / "pid").write_text(dead, encoding="utf-8")
+
+    run = run_against_fake_stack(
+        tmp_path,
+        make_fake_image(tmp_path),
+        lock_env(tmp_path),
+        extra_bin={"rm": FAKE_RM_CANNOT_REMOVE_LOCK_PID},
+    )
+
+    assert run.returncode != 0, run.output
+    assert "스모크 실패" in run.output, run.output
+    assert compose_calls(run.calls) == [], run.calls
+    assert (lock / "pid").read_text(encoding="utf-8") == dead
+    assert not takeover_dir(tmp_path).exists(), "넘겨받기 잠금을 풀지 않았다"
+
+
 def test_script_takes_over_a_lock_left_by_a_dead_smoke(tmp_path: Path) -> None:
     # kill -9처럼 정리할 틈 없이 끝난 스모크가 남긴 잠금이다. 그 프로세스는 이미 없다.
     lock = lock_dir(tmp_path)
