@@ -54,6 +54,8 @@ for top, dirs, files in os.walk(root):
 # 둘이 동시에 시작해도 하나만 잠금을 얻는다. 잠금 안의 pid 파일로 쥔 스모크가 살아 있는지 본다.
 lock_base=${TMPDIR:-/tmp}
 readonly LOCK_DIR="${lock_base%/}/${PROJECT}.lock"
+# 끝난 스모크가 남긴 잠금을 넘겨받는 동안 쥐는 두 번째 잠금이다. 넘겨받기를 한 번에 하나만 하게 한다.
+readonly TAKEOVER_DIR="${LOCK_DIR}.takeover"
 
 export API_PORT=0
 export DB_PORT=0
@@ -72,7 +74,7 @@ ok() {
 }
 
 acquire_lock() {
-  local holder
+  local holder current
   if mkdir "$LOCK_DIR" 2>/dev/null; then
     echo "$$" >"$LOCK_DIR/pid"
     return 0
@@ -84,13 +86,25 @@ acquire_lock() {
   if kill -0 "$holder" 2>/dev/null; then
     fail "다른 스모크(PID ${holder})가 ${PROJECT} 프로젝트로 돌고 있다. 그것이 끝난 뒤 다시 실행해라(잠금: ${LOCK_DIR})"
   fi
-  # 정리할 틈 없이 끝난(kill -9 등) 스모크가 남긴 잠금이다.
+  # 정리할 틈 없이 끝난(kill -9 등) 스모크가 남긴 잠금이다. 같은 낡은 잠금을 본 두 스모크가 함께
+  # 넘겨받으면, 뒤의 것이 앞의 것이 새로 만든 잠금을 지우고 다시 만들어 둘 다 잠금을 쥔다. 그래서
+  # 넘겨받기 잠금을 쥔 쪽만 넘겨받고, 그 안에서 잠금이 아직 그 끝난 스모크의 것인지 다시 본다.
+  mkdir "$TAKEOVER_DIR" 2>/dev/null \
+    || fail "다른 스모크가 잠금(${LOCK_DIR})을 넘겨받고 있다. 그것이 끝난 뒤 다시 실행해라. 도는 스모크가 없으면 ${TAKEOVER_DIR} 폴더를 지우고 다시 실행해라"
+  current=$(cat "$LOCK_DIR/pid" 2>/dev/null || true)
+  if [ "$current" != "$holder" ]; then
+    rmdir "$TAKEOVER_DIR" 2>/dev/null || true
+    fail "다른 스모크가 방금 잠금(${LOCK_DIR})을 넘겨받았다. 그것이 끝난 뒤 다시 실행해라"
+  fi
   echo "=== 끝난 스모크(PID ${holder})가 남긴 잠금을 넘겨받는다"
   rm -f "$LOCK_DIR/pid"
   rmdir "$LOCK_DIR" 2>/dev/null || true
-  mkdir "$LOCK_DIR" 2>/dev/null \
-    || fail "다른 스모크가 방금 잠금(${LOCK_DIR})을 얻었다. 그것이 끝난 뒤 다시 실행해라"
+  if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    rmdir "$TAKEOVER_DIR" 2>/dev/null || true
+    fail "다른 스모크가 방금 잠금(${LOCK_DIR})을 얻었다. 그것이 끝난 뒤 다시 실행해라"
+  fi
   echo "$$" >"$LOCK_DIR/pid"
+  rmdir "$TAKEOVER_DIR" 2>/dev/null || true
 }
 
 release_lock() {

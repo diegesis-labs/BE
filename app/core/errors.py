@@ -36,6 +36,8 @@ _HTTP_ERRORS: dict[int, tuple[str, str]] = {
 }
 
 # OpenAPI 문서에 싣는 검증 실패 응답(400)의 스키마. 실제 응답과 같은 모양이다.
+# detail은 요청 검증 실패에만 있다. 본문을 해석하지 못한 HTTP 예외 400에는 없으므로 필수로
+# 적지 않는다.
 _VALIDATION_ERROR_SCHEMA = "ValidationErrorResponse"
 _VALIDATION_ERROR_DETAIL_SCHEMA = "ValidationErrorDetail"
 _SCHEMA_REF = "#/components/schemas/"
@@ -61,7 +63,7 @@ _OPENAPI_SCHEMAS: dict[str, dict[str, Any]] = {
                 "items": {"$ref": _SCHEMA_REF + _VALIDATION_ERROR_DETAIL_SCHEMA},
             },
         },
-        "required": ["code", "message", "detail"],
+        "required": ["code", "message"],
     },
 }
 # FastAPI가 기본으로 싣는 검증 실패(422)의 스키마. 이 서버는 그 형식으로 응답하지 않는다.
@@ -186,16 +188,28 @@ async def _handle_http_exception(request: Request, exc: Exception) -> Response:
         except ValueError:
             # 499처럼 HTTP 표준에 이름이 없는 상태는 code를 정할 수 없다. 던진 코드의 잘못이므로
             # 예상하지 못한 문제로 응답하고, 무엇을 던졌는지 로그에 남긴다.
-            logger.error(
-                "이름이 없는 HTTP 상태의 예외: %s %s → %s",
-                request.method,
-                request.url.path,
-                status_code,
-            )
+            _log_server_error("이름이 없는 HTTP 상태의 예외", request, error)
             return _error_response(500, "INTERNAL_ERROR", _INTERNAL_ERROR_MESSAGE)
+    if status_code >= 500:
+        # 응답만으로는 처리되지 않은 예외와 구별되지 않으므로, 원인을 서버 로그에 남긴다.
+        _log_server_error("서버 오류로 응답한 HTTP 예외", request, error)
     # 예외의 detail은 응답에 담지 않는다. 영어 원문("Not Found")이거나
     # 던진 쪽의 내부 사정일 수 있다. 405의 Allow처럼 예외가 함께 실은 헤더는 그대로 보낸다.
     return _error_response(status_code, code, message, headers=error.headers)
+
+
+def _log_server_error(what: str, request: Request, error: StarletteHTTPException) -> None:
+    # 예외의 detail은 응답에 담지 않으므로 로그에만 남긴다. exc_info로 던진 자리의 스택과
+    # 원인 예외(raise ... from)도 함께 남는다.
+    logger.error(
+        "%s: %s %s → %s (%s)",
+        what,
+        request.method,
+        request.url.path,
+        error.status_code,
+        error.detail,
+        exc_info=error,
+    )
 
 
 async def _handle_unhandled_exception(request: Request, exc: Exception) -> JSONResponse:

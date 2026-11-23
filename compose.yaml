@@ -18,7 +18,8 @@ services:
       POSTGRES_DB: diegesis
     ports:
       # 로컬에 설치한 PostgreSQL이 5432를 쓰고 있으면 DB_PORT로 바꾼다.
-      - "${DB_PORT:-5432}:5432"
+      # 위의 고정 계정으로 누구나 접속할 수 있으므로 이 컴퓨터(127.0.0.1)에만 연다.
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
     volumes:
       # PostgreSQL 18부터 이미지의 데이터 경로가 /var/lib/postgresql 아래로 바뀌었다.
       - db-data:/var/lib/postgresql
@@ -47,8 +48,8 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://diegesis:diegesis@db:5432/diegesis
     ports:
-      # 8080을 다른 프로그램이 쓰고 있으면 API_PORT로 바꾼다.
-      - "${API_PORT:-8080}:8080"
+      # 8080을 다른 프로그램이 쓰고 있으면 API_PORT로 바꾼다. 이 컴퓨터(127.0.0.1)에만 연다.
+      - "127.0.0.1:${API_PORT:-8080}:8080"
     depends_on:
       migrate:
         condition: service_completed_successfully

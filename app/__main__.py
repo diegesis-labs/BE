@@ -1,24 +1,12 @@
-"""`python -m app`으로 서버를 띄운다. 로그 설정을 조립해 uvicorn을 실행하는 일만 한다."""
+"""`python -m app`으로 서버를 띄운다. 설정을 읽어 uvicorn을 실행하는 일만 한다.
 
-import copy
-from typing import Any
+로그 설정은 app/core/log_config.py가 조립한다.
+"""
 
 import uvicorn
-from uvicorn.config import LOGGING_CONFIG
 
 from app.core.config import get_settings
-
-
-def log_config(level: str) -> dict[str, Any]:
-    """uvicorn의 기본 로그 설정에 앱의 로거(`app`과 그 아래 `app.*`)를 더한다.
-
-    uvicorn의 log_level은 uvicorn의 로거에만 걸린다. 앱의 로거에도 LOG_LEVEL을 걸고, uvicorn과 같은
-    처리기와 서식으로 내보낸다(docs/CONFIGURATION.md 3.1절).
-    """
-    config = copy.deepcopy(LOGGING_CONFIG)
-    config["loggers"]["app"] = {"handlers": ["default"], "level": level, "propagate": False}
-    return config
-
+from app.core.log_config import log_config
 
 if __name__ == "__main__":
     settings = get_settings()
