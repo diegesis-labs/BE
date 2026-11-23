@@ -55,6 +55,7 @@ flowchart TD
 
 - [DEVELOPMENT.md 1절](DEVELOPMENT.md#1-개발-환경-준비)대로 `uv sync`를 실행했습니다.
 - Orca 앱이 켜져 있고 `orca status`의 `runtimeReachable`이 `true`입니다.
+- Docker Desktop이 켜져 있습니다. 검사 명령의 통합 테스트와 compose 스모크가 Docker를 쓰므로, 꺼져 있으면 무인 step이 모두 실패합니다.
 - `claude` 명령이 로그인된 상태입니다.
 - PR을 열 사람은 `gh auth status`가 통과합니다.
 
@@ -179,6 +180,7 @@ HARNESS_MODEL=claude-sonnet-5-5 scripts/harness-run.sh 3-books
 | `uv` | 검사 명령을 실행합니다. |
 | `orca` | worktree를 만듭니다. Orca가 만들지 않은 worktree는 사이드패널에 보이지 않으므로, `git worktree add`로 대신하지 않습니다. |
 | `gh` | PR을 엽니다. |
+| `docker` | 통합 테스트의 데이터베이스와 compose 스모크를 띄웁니다. |
 | `jq` 또는 `python3` | 가드가 입력을 읽습니다. 둘 다 없으면 가드가 아무것도 막지 않습니다. |
 
 리뷰는 다섯 차원을 하위 에이전트 다섯에게 나누어 맡기고 결과를 메시지로 돌려받습니다. 이 방식은 Claude Code의 에이전트 팀 기능에 기대며, 이 기능은 환경 변수 `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`로 켭니다. 지금은 이 값을 레포의 설정에 넣지 않았으므로, harness를 돌릴 사람이 자기 Claude Code 설정에 넣어 두어야 합니다.

@@ -424,7 +424,9 @@ flowchart TD
 BE/
 ├── app/
 │   ├── main.py            # 서버 시작점. 라우터와 어댑터를 조립한다.
+│   ├── __main__.py        # python -m app 으로 서버를 실행한다.
 │   ├── core/              # 설정, DB 연결, 로그인 상태 확인, 에러 형식, 포트 정의
+│   ├── health/            # 헬스체크
 │   ├── auth/              # Google 로그인, 로그인 상태, 허용 목록
 │   ├── books/             # 책, 챕터, 문장, 장면 조회, 읽은 위치
 │   ├── music/             # 곡, 구간, 음원 주소
@@ -437,6 +439,9 @@ BE/
 ├── scripts/               # 로컬 개발용 예시 데이터 만들기 등
 ├── docs/
 ├── .github/workflows/     # 검사와 자동 배포 (CI/CD)
+├── Dockerfile             # 서버의 컨테이너 이미지
+├── compose.yaml           # 로컬에서 데이터베이스, 마이그레이션, 서버를 함께 띄운다.
+├── alembic.ini            # Alembic 설정
 ├── .env.example
 └── .gitignore
 ```
@@ -451,6 +456,8 @@ BE/
 | `repository.py` | 데이터베이스를 읽고 씁니다.                     |
 | `models.py`     | 데이터베이스 테이블을 정의합니다.                  |
 | `schemas.py`    | 요청과 응답의 형식을 정의합니다.                  |
+
+다만 헬스체크(`health/`)처럼 규칙도 저장할 데이터도 없는 기능 폴더에는 `router.py`와 `schemas.py`만 둡니다.
 
 
 ## 9. 기술스택
