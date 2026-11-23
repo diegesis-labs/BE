@@ -43,7 +43,7 @@ flowchart TD
 | 5. 리뷰 | 구현한 세션과 무관한 새 에이전트 세션이 correctness, security, architecture, test coverage, behavioral의 다섯 차원으로 판정합니다. 이 세션은 코드를 고치지 않습니다. | `review/review-N.md` |
 | 6. 리뷰 처분 | 또 다른 새 에이전트 세션이 결함을 하나씩 대조해서, 고치거나 근거를 들어 기각하거나 사람에게 넘깁니다. | `review/fix-N.md`, 수정 커밋 |
 | 7. 사람의 확인 | 사람만 볼 수 있는 항목을 직접 확인하고 체크합니다. 항목이 없는 phase도 있습니다. | 체크된 `MANUAL.md` |
-| 8. PR | 관문을 점검하고 PR의 본문을 만듭니다. 사람이 본문을 확인한 뒤에 PR을 엽니다. | PR |
+| 8. PR | 관문을 점검하고 검사를 다시 돌립니다. 새 에이전트 세션이 지금의 코드를 읽고 이 phase가 만든 것을 요약하면, 그 요약과 리뷰·처분 기록으로 본문을 만듭니다. 사람이 본문을 확인한 뒤에 PR을 엽니다. | PR |
 
 구현, 리뷰, 처분을 서로 다른 에이전트 세션에 맡기는 이유는 자기가 한 일을 자기가 판정하지 않게 하기 위해서입니다. 구현한 세션은 자기 코드를 옳다고 보는 쪽으로 기울고, 판정한 세션이 직접 고치면 "고쳤으니 없는 문제"가 됩니다.
 
@@ -55,6 +55,7 @@ flowchart TD
 
 - [DEVELOPMENT.md 1절](DEVELOPMENT.md#1-개발-환경-준비)대로 `uv sync`를 실행했습니다.
 - Orca 앱이 켜져 있고 `orca status`의 `runtimeReachable`이 `true`입니다.
+- Docker Desktop이 켜져 있습니다. 검사 명령의 통합 테스트와 compose 스모크가 Docker를 쓰므로, 꺼져 있으면 무인 step이 모두 실패합니다.
 - `claude` 명령이 로그인된 상태입니다.
 - PR을 열 사람은 `gh auth status`가 통과합니다.
 
@@ -89,7 +90,7 @@ scripts/harness-run.sh 3-books
 
 ### 2.4 사람의 확인
 
-`phases/<phase 이름>/MANUAL.md`의 항목을 직접 확인하고, `- [ ]`를 `- [x]`로 바꾼 뒤 관찰한 값을 적습니다. 그리고 커밋한 뒤 같은 명령을 다시 실행합니다. 이미 끝난 step과 리뷰는 다시 돌지 않으며, phase가 완료로 기록됩니다.
+`phases/<phase 이름>/MANUAL.md`의 항목을 직접 확인하고, `- [ ]`를 `- [x]`로 바꾼 뒤 그 항목 아래의 `관찰한 값`에 본 것을 적습니다. 본 것이 여러 가지면 한 단계 더 들여 쓴 목록으로 나눕니다. 그리고 커밋한 뒤 같은 명령을 다시 실행합니다. 이미 끝난 step과 리뷰는 다시 돌지 않으며, phase가 완료로 기록됩니다.
 
 처분 기록에 "사람 판단 필요"가 있으면 그 항목을 사람이 정합니다. 정한 뒤에는 그 항목을 처분 기록의 "고쳤다"나 "기각했다"로 옮기고, 파일 끝에 있는 `disposition` 줄의 숫자를 고칩니다.
 
@@ -97,10 +98,10 @@ scripts/harness-run.sh 3-books
 
 ```bash
 scripts/harness-pr.sh 3-books            # 점검하고 본문을 보여 주기만 합니다.
-scripts/harness-pr.sh 3-books --create   # 브랜치를 올리고 PR을 엽니다.
+scripts/harness-pr.sh 3-books --create   # 브랜치를 올리고 PR을 엽니다. 열린 PR이 있으면 그 본문을 바꿉니다.
 ```
 
-먼저 `--create` 없이 실행해서 본문을 확인합니다. 문제가 없으면 `--create`를 붙여 다시 실행합니다. PR을 합치는 방식은 [DEVELOPMENT.md 6.3절](DEVELOPMENT.md#63-pr)에 있습니다.
+먼저 `--create` 없이 실행해서 본문을 확인합니다. 문제가 없으면 `--create`를 붙여 다시 실행합니다. 요약은 레포에 남기지 않고 본문에만 실으며, 코드가 그대로면 다시 쓰지 않으므로 확인한 본문이 그대로 나갑니다. PR을 연 뒤에 코드가 바뀌었으면 `--create`로 다시 실행해 본문을 맞춥니다. PR을 합치는 방식은 [DEVELOPMENT.md 6.3절](DEVELOPMENT.md#63-pr)에 있습니다.
 
 PR이 합쳐진 뒤에는 Orca에서 그 worktree를 정리합니다.
 
@@ -155,7 +156,7 @@ harness는 아래 형식으로 커밋을 만듭니다. 범위에는 phase의 이
 
 | 이름 | 뜻 | 기본값 |
 | --- | --- | --- |
-| `HARNESS_MODEL` | 헤드리스로 띄우는 에이전트 세션의 모델입니다. step 실행, 리뷰, 처분에 모두 적용됩니다. | `claude-opus-5-5` |
+| `HARNESS_MODEL` | 헤드리스로 띄우는 에이전트 세션의 모델입니다. step 실행, 리뷰, 처분, PR 본문의 요약에 모두 적용됩니다. | `claude-opus-5-5` |
 | `HARNESS_MAX_REVIEW_ROUNDS` | 리뷰와 처분을 되풀이하는 최대 횟수입니다. | `3` |
 
 ```bash
@@ -169,7 +170,7 @@ HARNESS_MODEL=claude-sonnet-5-5 scripts/harness-run.sh 3-books
 | 이름 | 넣는 때 | 가드의 동작 |
 | --- | --- | --- |
 | `HARNESS_RUN` | step 실행과 리뷰 처분 | 가드와 검사 설정을 고치지 못하게 하고, 백그라운드 실행과 push를 막습니다. |
-| `HARNESS_REVIEW` | 리뷰 | 종료 검사를 건너뛰고, 백그라운드 실행과 push를 막습니다. |
+| `HARNESS_REVIEW` | 리뷰와 PR 본문의 요약 | 종료 검사를 건너뛰고, 백그라운드 실행과 push를 막습니다. |
 
 ### 4.3 필요한 도구
 
@@ -179,6 +180,7 @@ HARNESS_MODEL=claude-sonnet-5-5 scripts/harness-run.sh 3-books
 | `uv` | 검사 명령을 실행합니다. |
 | `orca` | worktree를 만듭니다. Orca가 만들지 않은 worktree는 사이드패널에 보이지 않으므로, `git worktree add`로 대신하지 않습니다. |
 | `gh` | PR을 엽니다. |
+| `docker` | 통합 테스트의 데이터베이스와 compose 스모크를 띄웁니다. |
 | `jq` 또는 `python3` | 가드가 입력을 읽습니다. 둘 다 없으면 가드가 아무것도 막지 않습니다. |
 
 리뷰는 다섯 차원을 하위 에이전트 다섯에게 나누어 맡기고 결과를 메시지로 돌려받습니다. 이 방식은 Claude Code의 에이전트 팀 기능에 기대며, 이 기능은 환경 변수 `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`로 켭니다. 지금은 이 값을 레포의 설정에 넣지 않았으므로, harness를 돌릴 사람이 자기 Claude Code 설정에 넣어 두어야 합니다.

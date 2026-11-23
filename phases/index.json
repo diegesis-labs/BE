@@ -1,1 +1,9 @@
-{"phases": []}
+{
+  "phases": [
+    {
+      "dir": "0-project-setup",
+      "status": "completed",
+      "completed_at": "2026-11-23T12:16:11+0900"
+    }
+  ]
+}

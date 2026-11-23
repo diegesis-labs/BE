@@ -3,7 +3,15 @@ name = "diegesis-be"
 version = "0.1.0"
 description = "소설의 분위기에 맞는 음악을 재생해 주는 전자책 플랫폼 Diegesis의 백엔드"
 requires-python = ">=3.14,<3.15"
-dependencies = []
+dependencies = [
+    "alembic>=1.20.1",
+    "asyncpg>=0.32.0",
+    "fastapi>=0.165.0",
+    "pgvector>=0.5.1",
+    "pydantic-settings>=2.16.3",
+    "sqlalchemy[asyncio]>=2.1.9",
+    "uvicorn>=0.54.0",
+]
 
 [tool.uv]
 package = false
@@ -31,10 +39,22 @@ venv = ".venv"
 testpaths = ["tests", "scripts"]
 addopts = "--import-mode=importlib -ra"
 pythonpath = ["."]
+# 비동기 테스트는 표시 없이 pytest-asyncio로 돈다. 이벤트 루프는 테스트마다 새로 만든다.
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+asyncio_default_test_loop_scope = "function"
+markers = [
+    "integration: testcontainers로 띄운 실제 PostgreSQL에서 도는 통합 테스트(docs/DEVELOPMENT.md 4.3절)",
+]
 
 [dependency-groups]
 dev = [
+    "actionlint-py>=1.7.12.25",
+    "httpx>=0.28.1",
     "pyright>=1.1.414",
     "pytest>=9.2.0",
+    "pytest-asyncio>=1.5.0",
+    "pyyaml>=6.0.4",
     "ruff>=0.17.6",
+    "testcontainers>=4.15.0",
 ]

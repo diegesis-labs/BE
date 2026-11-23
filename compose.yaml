@@ -1,0 +1,69 @@
+# 로컬에서 데이터베이스, 마이그레이션, 서버를 함께 띄운다. 처음 받은 레포에서 `docker compose up --build`
+# 하나로 동작한다. 서버 이미지는 레지스트리에서 받지 않고 이 레포에서 빌드한다(docs/DECISIONS.md의 D-37).
+#
+# - `platform:`과 `env_file`을 적지 않는다. 각 컴퓨터가 자기 CPU 아키텍처의 이미지를 쓰고,
+#   개발자의 `.env`에 든 주소가 컨테이너 안의 주소를 덮어쓰면 안 되기 때문이다.
+# - `db`의 이미지는 통합 테스트(tests/support/postgres.py)가 이 파일에서 읽어 쓴다.
+#   이미지의 이름과 버전은 여기에만 적는다(docs/DEVELOPMENT.md 1절).
+
+services:
+  db:
+    # pgvector 확장의 버전과 PostgreSQL의 주 버전이 모두 박힌 태그를 쓴다.
+    # 확장의 버전이 바뀌면 벡터 검색의 동작이 바뀌기 때문이다.
+    image: pgvector/pgvector:0.8.7-pg19
+    environment:
+      # 로컬에서만 쓰는 값이다. docs/CONFIGURATION.md 3.2절의 예시 주소와 같다.
+      POSTGRES_USER: diegesis
+      POSTGRES_PASSWORD: diegesis
+      POSTGRES_DB: diegesis
+    ports:
+      # 로컬에 설치한 PostgreSQL이 5432를 쓰고 있으면 DB_PORT로 바꾼다.
+      # 위의 고정 계정으로 누구나 접속할 수 있으므로 이 컴퓨터(127.0.0.1)에만 연다.
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
+    volumes:
+      # PostgreSQL 18부터 이미지의 데이터 경로가 /var/lib/postgresql 아래로 바뀌었다.
+      - db-data:/var/lib/postgresql
+    healthcheck:
+      # TCP로 확인한다. 첫 초기화 중에 이미지가 띄우는 임시 서버는 유닉스 소켓만 열기 때문에, 소켓만 보면
+      # 그때 healthy가 되어 TCP로 붙는 migrate가 거부당할 수 있다.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U diegesis -d diegesis"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  # 서버와 같은 이미지로 마이그레이션을 한 번 실행하고 멈춘다(docs/DECISIONS.md의 D-40).
+  # 서버가 시작할 때마다 실행하면, 서버가 여러 개 뜰 때 마이그레이션이 동시에 돌 수 있다.
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      # 컨테이너 안에서는 db 서비스의 이름으로 닿는다. localhost는 그 컨테이너 자신이다.
+      DATABASE_URL: postgresql+asyncpg://diegesis:diegesis@db:5432/diegesis
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+asyncpg://diegesis:diegesis@db:5432/diegesis
+    ports:
+      # 8080을 다른 프로그램이 쓰고 있으면 API_PORT로 바꾼다. 이 컴퓨터(127.0.0.1)에만 연다.
+      - "127.0.0.1:${API_PORT:-8080}:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    # `docker compose up --wait`가 서버가 응답할 때까지 기다리게 한다.
+    # 이미지에 curl이 없으므로 python으로 부른다. 닿지 않거나 오류 응답이면 예외로 끝나 실패로 판정된다.
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=2)"
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  db-data:

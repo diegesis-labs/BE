@@ -4,7 +4,12 @@
 #   사용법: scripts/harness-pr.sh {task} [--create] [--base <브랜치>]
 #
 #   기본은 드라이런이다. 관문을 검사하고 PR의 제목과 본문을 표준 출력에 찍기만 한다.
-#   --create를 줘야 브랜치를 push하고 PR을 연다. --base는 PR이 향할 브랜치다(기본 main).
+#   --create를 줘야 브랜치를 push하고 PR을 연다. 그 브랜치의 PR이 이미 열려 있으면 새로 열지
+#   않고 그 PR의 제목과 본문을 지금의 내용으로 바꾼다. --base는 PR이 향할 브랜치다(기본 main).
+#
+#   흐름: 관문 → 검사(scripts/check.sh --all) → 최종 요약 → 본문. 본문은 언제나 지금의 코드로
+#   만든다. "만든 것"은 별도 세션이 지금의 코드를 읽고 쓴 요약이고(pr_summary), "리뷰와 처분"은
+#   리뷰와 처분 기록을 그때 읽는다. PR을 연 뒤에 코드가 바뀌면 --create로 다시 돌려 본문을 맞춘다.
 #
 # PR은 레포 밖에 보이는 행동이다. 사람이 본문을 보고 승인한 뒤에만 --create를 붙인다.
 # 헤드리스 세션은 이 길로도 PR을 열 수 없다 — bash-guard가 그 세션의 push와 gh pr create를 막는다.
@@ -123,15 +128,15 @@ sys.exit(1 if problems else 0)
 PY
 }
 
-# PR의 제목을 첫 줄에, 본문을 그 뒤에 찍는다. 셋째 인자는 검사 결과의 요약이다.
-pr_text() { # pr_text <레포 루트> <task> <검사 요약>
-  python3 - "$1" "$2" "$3" <<'PY'
+# PR의 제목을 첫 줄에, 본문을 그 뒤에 찍는다. 셋째 인자는 검사 결과의 요약, 넷째는 pr_summary가 찍은 최종 요약이다.
+pr_text() { # pr_text <레포 루트> <task> <검사 요약> <최종 요약>
+  python3 - "$1" "$2" "$3" "$4" <<'PY'
 import json
 import re
 import sys
 from pathlib import Path
 
-root, task, check_summary = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+root, task, check_summary, summary = Path(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
 phase = root / "phases" / task
 review_dir = phase / "review"
 index = json.loads((phase / "index.json").read_text(encoding="utf-8"))
@@ -168,45 +173,72 @@ if issue:
 if epic_doc:
     out += [f"Epic 문서: `{epic_doc.relative_to(root)}`", ""]
 
-out += ["## 만든 것", ""]
-for s in index["steps"]:
-    out.append(f"- step {s['step']} `{s['name']}`: {s.get('summary', '(요약 없음)')}")
-out.append("")
+# step의 summary는 처분 전에 쓴 것이라 싣지 않는다. pr_summary를 보라.
+out += ["## 만든 것", "", *summary.strip().splitlines(), ""]
 
 
 def round_of(path: Path) -> int:
     return int(path.stem.split("-")[1])
 
 
+def marker(path: Path, kind: str, key: str) -> int | None:
+    """파일 끝의 판독용 줄에서 값을 읽는다. 관문의 marker와 같은 규칙이다."""
+    lines = [
+        line
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if re.fullmatch(rf"<!-- {kind}: .*-->\s*", line)
+    ]
+    found = re.findall(rf"(?:^|\s){re.escape(key)}=(\d+)", lines[-1]) if lines else []
+    return int(found[-1]) if found else None
+
+
+def shown(value: int | None) -> str:
+    return "?" if value is None else str(value)
+
+
+# 라운드마다 리뷰가 찾은 결함과 그 처분을 한 줄에 싣는다. 리뷰 리포트의 판정표를 그대로 옮기지
+# 않는다 — 그 표는 처분 전의 상태라서, 처분으로 닫힌 결함이 남아 있는 것처럼 읽힌다.
 reviews = sorted(
     (p for p in review_dir.glob("review-*.md") if re.fullmatch(r"review-\d+", p.stem)), key=round_of
 )
-out += ["## 리뷰", ""]
+out += ["## 리뷰와 처분", ""]
 if reviews:
+    rows: list[str] = []
+    quotes: list[str] = []
+    rejected_total = 0
+    for review in reviews:
+        n = round_of(review)
+        found = " · ".join(shown(marker(review, "verdict", k)) for k in ("critical", "major", "minor"))
+        fix = review_dir / f"fix-{n}.md"
+        if fix.exists():
+            fixed, rejected, waiting = (marker(fix, "disposition", k) for k in ("fixed", "rejected", "needs-human"))
+            rejected_total += rejected or 0
+            rows.append(f"| {n}차 | {found} | {shown(fixed)} | {shown(rejected)} | {shown(waiting)} |")
+            quote = [line[1:].strip() for line in fix.read_text(encoding="utf-8").splitlines() if line.startswith(">")]
+            quotes.append(f"- {n}차 `{fix.relative_to(root)}`: {' '.join(quote) or '(머리 요약 없음)'}")
+        else:
+            rows.append(f"| {n}차 | {found} | — | — | — |")
+    out += [
+        f"리뷰를 {len(reviews)}라운드 돌았습니다. 라운드마다 별도 세션이 리뷰하고, 또 다른 세션이 처분했습니다.",
+        "",
+        "| 라운드 | 리뷰가 찾은 결함 (critical · major · minor) | 고침 | 기각 | 사람 판단 필요 |",
+        "|---|---|---|---|---|",
+        *rows,
+        "",
+    ]
+    # 관문이 확인한 것: 마지막 리뷰에 critical·major가 없고, 모든 처분 기록의 사람 판단 필요가 0이다.
+    closing = ["남은 결함은 없습니다. 리뷰가 찾은 결함은 모두 고쳤거나, 근거를 들어 기각했습니다."]
+    if rejected_total:
+        closing.append(f"기각한 {rejected_total}건의 근거는 각 라운드의 처분 기록에 있습니다.")
     last = reviews[-1]
-    out += [f"{len(reviews)}라운드를 돌았습니다. 아래는 마지막 리포트(`{last.relative_to(root)}`)의 종합 판정입니다.", ""]
-    section: list[str] = []
-    inside = False
-    for line in last.read_text(encoding="utf-8").splitlines():
-        if line.startswith("## "):
-            if inside:
-                break
-            inside = line.strip() == "## 종합 판정"
-            continue
-        if inside and not line.startswith("<!--"):
-            section.append(line)
-    out += [line for line in "\n".join(section).strip().splitlines()] or ["(종합 판정 절을 찾지 못했습니다)"]
-    out.append("")
-
-fixes = sorted(review_dir.glob("fix-*.md"), key=round_of)
-if fixes:
-    out += ["## 리뷰 처분", ""]
-    for fix in fixes:
-        quote = [
-            line[1:].strip() for line in fix.read_text(encoding="utf-8").splitlines() if line.startswith(">")
-        ]
-        out.append(f"- `{fix.relative_to(root)}`: {' '.join(quote) or '(머리 요약 없음)'}")
-    out.append("")
+    n = round_of(last)
+    if (review_dir / f"fix-{n}.md").exists():
+        closing.append(f"마지막 라운드({n}차)는 minor만 있어서, 처분한 결과를 다시 리뷰하지 않았습니다.")
+    else:
+        closing.append(f"마지막 리뷰({n}차)는 결함을 찾지 못했습니다.")
+    out += [" ".join(closing), ""]
+    if quotes:
+        out += quotes + [""]
 
 out += ["## 사람이 확인한 것", ""]
 manual = phase / "MANUAL.md"
@@ -230,6 +262,95 @@ PY
 [ -n "${HARNESS_PR_LIB:-}" ] && return 0
 
 say() { echo "harness-pr: $*" >&2; }
+
+# PR 본문의 "만든 것"을 표준 출력에 찍는다. 별도 헤드리스 세션이 지금의 코드를 읽고 쓴 요약이다.
+# step의 summary는 각 step이 끝날 때 쓴 것이라 리뷰 처분과 사람의 수정이 빠져 있다.
+#
+# 요약은 레포에 남기지 않고 PR 본문에만 싣는다. 같은 코드로 다시 쓰지 않으려고 git 디렉터리
+# (git rev-parse --git-path harness-pr/{task}.summary.md)에 둔다. 첫 줄이 요약이 다룬 코드 커밋 —
+# phases/ 밖을 마지막으로 바꾼 커밋 — 이고, 그 커밋이 그대로면 세션을 띄우지 않는다. 그래서
+# 드라이런에서 사람이 승인한 본문이 --create에서 그대로 나간다. phases/ 아래(MANUAL 체크, 처분
+# 기록)는 코드가 아니므로 세지 않는다. 그 내용은 본문의 다른 절이 매번 새로 읽는다.
+pr_summary() { # pr_summary <레포 루트> <task> <base>
+  local root="$1" task="$2" base="$3" code cache draft_dir draft prompt model log head_before session_code
+  code="$(git -C "$root" log -1 --format=%H -- . ':(exclude)phases')"
+  [ -n "$code" ] || code="$(git -C "$root" rev-parse HEAD)"
+  cache="$(git -C "$root" rev-parse --path-format=absolute --git-path "harness-pr/$task.summary.md")"
+  if [ "$(head -n 1 "$cache" 2>/dev/null)" = "<!-- summary-of: $code -->" ]; then
+    say "최종 요약이 지금의 코드를 다룬다 — 다시 쓰지 않는다"
+    sed '1d' "$cache"
+    return 0
+  fi
+  rm -f "$cache"
+
+  # 범위의 기준은 PR이 향할 브랜치다. 로컬에 없으면 원격의 것을 쓴다. 둘 다 없으면 세션이 빈
+  # diff를 보고 "만든 것이 없다"고 쓰므로 멈춘다.
+  if ! git -C "$root" rev-parse --verify --quiet "$base^{commit}" >/dev/null; then
+    if git -C "$root" rev-parse --verify --quiet "origin/$base^{commit}" >/dev/null; then
+      base="origin/$base"
+    else
+      say "요약할 범위의 기준($base)을 이 저장소에서 찾을 수 없다"
+      return 1
+    fi
+  fi
+
+  # 세션은 레포 밖의 임시 파일에 쓴다. 그래야 세션이 레포를 바꿨는지를 git status로 가를 수 있다.
+  draft_dir="$(mktemp -d "${TMPDIR:-/tmp}/harness-pr-summary.XXXXXX")" || return 1
+  draft="$draft_dir/summary.md"
+  prompt="phase \`$task\`의 PR 본문에 실을 최종 요약을 \`$draft\`에 써라.
+
+이 phase는 step 실행, 리뷰, 리뷰 처분을 모두 거쳤다. 요약은 그 과정이 아니라 지금 브랜치에 있는 최종 결과를 설명한다. PR을 검토하는 사람이 이 요약만 읽고 이 phase가 무엇을 만들었는지 알 수 있어야 한다.
+
+## 읽을 것
+
+- \`phases/$task/index.json\`의 step별 \`name\`과 \`summary\`. step이 끝날 때 쓴 것이라 뒤의 처분과 사람의 수정이 빠져 있다. 요약의 뼈대로만 쓴다.
+- \`phases/$task/review/fix-*.md\`의 \"고쳤다\"와 \"기각했다\". 리뷰 뒤에 무엇이 바뀌었는지 알려 준다.
+- \`git diff --stat $base...HEAD\`와 바뀐 파일의 지금 내용. 요약의 근거는 코드다. 기록과 코드가 다르면 코드를 따른다.
+
+## 형식
+
+- 제목 없이 목록만 쓴다. PR 본문이 \"## 만든 것\" 아래에 이 파일을 그대로 싣는다.
+- step마다 첫 단계 항목을 하나 둔다. 꼴은 \"- step N \`이름\`: 이 step이 만든 것을 한 문장으로\"이다.
+- 그 아래에 두 칸 들여 쓴 둘째 단계 항목을 2~5개 둔다. 최종 코드의 동작이나 규칙을 한 항목에 한 가지씩 한 줄로 적는다. 리뷰 처분으로 바뀐 것은 바뀐 뒤의 모습으로 적는다.
+- 어느 step에도 속하지 않는 변경(가드, 문서, harness 스크립트 등)은 마지막의 \`- 그 밖에\` 아래에 같은 방식으로 적는다. 없으면 그 항목을 두지 않는다.
+- 테스트의 개수, 커밋 해시, 세션의 시행착오, 리뷰와 처분의 경과는 적지 않는다. 그것은 PR 본문의 다른 절이 싣는다.
+- \`docs/DECISIONS.md\`의 문서 작성 규칙을 따른다. 명사만 나열하지 말고 완성된 문장으로 쓴다.
+
+## 금지
+
+- 레포 안의 파일을 만들거나 고치지 마라. 이유: 요약은 레포에 남기지 않고 PR 본문에만 싣는다. 레포가 바뀌면 스크립트가 요약을 버리고 멈춘다.
+- 커밋하지 마라.
+- 비밀값, 토큰, Docker Hub의 사용자 이름이나 이미지의 전체 이름을 적지 마라. 이유: 레포와 PR이 공개다(docs/DECISIONS.md의 D-37).
+
+**되묻지 말고 그대로 진행하라** — 이 세션은 헤드리스라 질문에 답이 오지 않는다."
+
+  model="${HARNESS_MODEL:-claude-opus-5-5}"
+  log="$root/phases/$task/review/session.log"
+  mkdir -p "$(dirname "$log")"
+  say "최종 요약 세션 ($task, $base...HEAD) — 로그 → $log"
+  head_before="$(git -C "$root" rev-parse HEAD)"
+  # HARNESS_REVIEW는 리뷰 세션과 같은 제약을 건다: 종료 검사를 건너뛰고, 백그라운드 실행과 push를 막는다.
+  # 세션의 출력은 본문이 아니므로 표준 오류로 보낸다.
+  (cd "$root" && HARNESS_REVIEW=1 claude -p --model "$model" --dangerously-skip-permissions "$prompt") 2>&1 | tee -a "$log" >&2
+  session_code="${PIPESTATUS[0]}"
+
+  local ok=""
+  if [ "$(git -C "$root" rev-parse HEAD)" != "$head_before" ]; then
+    say "요약 세션이 커밋했다 — \`git log\`로 보고 정리해라."
+  elif [ -n "$(git -C "$root" status --porcelain)" ]; then
+    say "요약 세션이 레포를 바꿨다 — \`git status\`로 보고 정리해라."
+  elif ! grep -q '[^[:space:]]' "$draft" 2>/dev/null; then
+    say "요약 세션이 요약을 남기지 않았다 (claude 종료 코드 $session_code). 로그: $log"
+  else
+    mkdir -p "$(dirname "$cache")"
+    { echo "<!-- summary-of: $code -->"; grep -v '^<!-- summary-of:' "$draft"; } >"$cache"
+    ok=1
+  fi
+  rm -f "$draft"
+  rmdir "$draft_dir" 2>/dev/null
+  [ -n "$ok" ] || return 1
+  sed '1d' "$cache"
+}
 
 task="${1:-}"
 if [ -z "$task" ] || [ "${task#-}" != "$task" ]; then
@@ -295,7 +416,14 @@ if [ "$check_code" -ne 0 ]; then
   exit 1
 fi
 
-text="$(pr_text "$ROOT" "$task" "$check_summary")" || {
+# 요약은 검사가 통과한 뒤에 쓴다. 빨간 코드에 요약 세션을 쓰지 않는다. 리뷰와 처분이 닫힐 때
+# 쓰지 않고 여기서 쓰는 것은, 그 뒤의 처분이나 사람의 수정이 본문에서 빠지지 않게 하려는 것이다.
+summary="$(pr_summary "$ROOT" "$task" "$base")" || {
+  say "⏸ 최종 요약을 쓰지 못했다 — 위의 이유를 고친 뒤 다시 실행해라."
+  exit 1
+}
+
+text="$(pr_text "$ROOT" "$task" "$check_summary" "$summary")" || {
   say "PR 본문을 만들지 못했다"
   exit 1
 }
@@ -309,7 +437,7 @@ if [ -z "$create" ]; then
   echo
   printf '%s\n' "$body"
   echo
-  say "관문을 통과했다. 위 내용으로 PR을 열려면 사람의 승인을 받은 뒤 --create를 붙여 다시 실행해라."
+  say "관문을 통과했다. 위 내용으로 PR을 열려면 사람의 승인을 받은 뒤 --create를 붙여 다시 실행해라. 이 브랜치의 PR이 이미 열려 있으면 그 제목과 본문을 위 내용으로 바꾼다."
   exit 0
 fi
 
@@ -327,6 +455,22 @@ git -C "$ROOT" push -u origin "$branch" >&2 || {
 body_file="$(mktemp "${TMPDIR:-/tmp}/harness-pr-body.XXXXXX")"
 trap 'rm -f "$body_file"' EXIT
 printf '%s\n' "$body" >"$body_file"
+
+# 이미 열린 PR이 있으면 새로 열지 않고 그 PR의 제목과 본문을 바꾼다. PR을 연 뒤에 처분이나
+# 사람의 수정이 들어와도 본문이 코드와 어긋나지 않게 하려는 것이다. 찾지 못했으면(네트워크,
+# 인증) PR을 새로 열지 않고 멈춘다 — 열린 PR이 있는데 하나 더 열면 되돌려도 흔적이 남는다.
+existing="$(cd "$ROOT" && gh pr list --head "$branch" --base "$base" --state open --json number --jq '.[0].number // empty')" || {
+  say "열린 PR을 찾지 못했다 (gh pr list) — 브랜치는 이미 push됐다"
+  exit 1
+}
+if [ -n "$existing" ]; then
+  say "열린 PR #$existing 의 제목과 본문을 바꾼다 ($branch → $base)"
+  (cd "$ROOT" && gh pr edit "$existing" --title "$title" --body-file "$body_file") || {
+    say "gh pr edit가 실패했다 — 브랜치는 이미 push됐다"
+    exit 1
+  }
+  exit 0
+fi
 
 say "PR을 연다 ($branch → $base)"
 (cd "$ROOT" && gh pr create --base "$base" --head "$branch" --title "$title" --body-file "$body_file") || {

@@ -1,0 +1,206 @@
+#!/usr/bin/env bash
+# docker compose로 데이터베이스, 마이그레이션, 서버를 실제로 띄워서 가장 기본적인 동작을 확인하고 내린다.
+# 확인하는 것은 docs/backlog/epic-0/testcase.md의 TC-0.5.1 다섯 가지다. 하나라도 어긋나면 무엇이
+# 어긋났는지와 compose 로그의 끝부분을 찍고 0이 아닌 코드로 끝난다.
+#
+#   scripts/compose-smoke.sh     인자를 받지 않는다.
+#
+# 이미지를 빌드하느라 몇 분이 걸리므로 scripts/check.sh에는 넣지 않았다. 언제 돌리는지는
+# docs/DEVELOPMENT.md 2절에 있다.
+#
+# - 프로젝트 이름은 아래의 상수 하나로 고정하며, 환경변수나 인자로 바꿀 수 없다. 끝날 때 볼륨까지
+#   지우므로, 다른 이름으로 돌면 개발용으로 띄워 둔 compose의 데이터베이스 볼륨이 지워진다.
+#   compose는 -p로 넘긴 이름을 COMPOSE_PROJECT_NAME보다 먼저 쓴다.
+# - 이미지는 compose로만 빌드한다(docs/DECISIONS.md의 D-41).
+# - 호스트 포트는 0으로 넘겨 Docker가 비어 있는 포트를 고르게 한다. 개발용 compose와 부딪히지 않는다.
+# - 개발자의 `.env`를 compose의 변수로 읽지 않는다(--env-file /dev/null). 그 안의 값이 스모크를
+#   바꾸지 못하게 하기 위해서다.
+# - macOS(bash 3.2, BSD 도구)와 Linux(GNU 도구)에서 모두 돈다. sed -i, date, mktemp, stat처럼
+#   둘의 동작이 다른 명령을 쓰지 않는다.
+
+set -euo pipefail
+
+readonly PROJECT="diegesis-smoke"
+
+if [ "$#" -ne 0 ]; then
+  echo "사용법: scripts/compose-smoke.sh" >&2
+  echo "인자를 받지 않는다. 프로젝트 이름은 ${PROJECT}로 고정되어 있다." >&2
+  exit 64
+fi
+
+cd "$(dirname "$0")/.."
+
+# compose.yaml의 db 서비스에 적힌 로컬 전용 계정이다.
+readonly DB_USER="diegesis"
+readonly DB_NAME="diegesis"
+readonly VECTOR_QUERY="SELECT extversion FROM pg_extension WHERE extname = 'vector'"
+readonly HEALTH_BODY='{"status":"ok"}'
+# 인자로 받은 폴더 아래의 모든 .env 파일의 경로를 한 줄에 하나씩 찍는다. 커널이 만드는 가상 파일
+# 시스템(proc, sys, dev)은 이미지의 내용이 아니므로 건너뛴다.
+readonly ENV_FILE_SEARCH='
+import os
+import sys
+
+root = sys.argv[1]
+virtual = {os.path.join(root, name) for name in ("proc", "sys", "dev")}
+for top, dirs, files in os.walk(root):
+    dirs[:] = [name for name in dirs if os.path.join(top, name) not in virtual]
+    if ".env" in files:
+        print(os.path.join(top, ".env"))
+'
+
+# 모든 worktree가 같은 프로젝트 이름을 쓰므로, 스모크 두 개가 겹치면 서로의 컨테이너와 볼륨을 지운다.
+# 그래서 임시 폴더에 잠금 폴더를 만들어 한 번에 하나만 돌게 한다. mkdir은 폴더가 이미 있으면 실패하므로
+# 둘이 동시에 시작해도 하나만 잠금을 얻는다. 잠금 안의 pid 파일로 쥔 스모크가 살아 있는지 본다.
+lock_base=${TMPDIR:-/tmp}
+readonly LOCK_DIR="${lock_base%/}/${PROJECT}.lock"
+# 끝난 스모크가 남긴 잠금을 넘겨받는 동안 쥐는 두 번째 잠금이다. 넘겨받기를 한 번에 하나만 하게 한다.
+readonly TAKEOVER_DIR="${LOCK_DIR}.takeover"
+
+export API_PORT=0
+export DB_PORT=0
+
+compose() {
+  docker compose -p "$PROJECT" -f compose.yaml --env-file /dev/null "$@"
+}
+
+fail() {
+  echo "스모크 실패: $1" >&2
+  exit 1
+}
+
+ok() {
+  echo "확인: $1"
+}
+
+acquire_lock() {
+  local holder current
+  if mkdir "$LOCK_DIR" 2>/dev/null; then
+    echo "$$" >"$LOCK_DIR/pid"
+    return 0
+  fi
+  holder=$(cat "$LOCK_DIR/pid" 2>/dev/null || true)
+  if [ -z "$holder" ]; then
+    fail "다른 스모크가 막 시작했거나 잠금(${LOCK_DIR})이 비어 있다. 도는 스모크가 없으면 그 폴더를 지우고 다시 실행해라"
+  fi
+  if kill -0 "$holder" 2>/dev/null; then
+    fail "다른 스모크(PID ${holder})가 ${PROJECT} 프로젝트로 돌고 있다. 그것이 끝난 뒤 다시 실행해라(잠금: ${LOCK_DIR})"
+  fi
+  # 정리할 틈 없이 끝난(kill -9 등) 스모크가 남긴 잠금이다. 같은 낡은 잠금을 본 두 스모크가 함께
+  # 넘겨받으면, 뒤의 것이 앞의 것이 새로 만든 잠금을 지우고 다시 만들어 둘 다 잠금을 쥔다. 그래서
+  # 넘겨받기 잠금을 쥔 쪽만 넘겨받고, 그 안에서 잠금이 아직 그 끝난 스모크의 것인지 다시 본다.
+  mkdir "$TAKEOVER_DIR" 2>/dev/null \
+    || fail "다른 스모크가 잠금(${LOCK_DIR})을 넘겨받고 있다. 그것이 끝난 뒤 다시 실행해라. 도는 스모크가 없으면 ${TAKEOVER_DIR} 폴더를 지우고 다시 실행해라"
+  current=$(cat "$LOCK_DIR/pid" 2>/dev/null || true)
+  if [ "$current" != "$holder" ]; then
+    rmdir "$TAKEOVER_DIR" 2>/dev/null || true
+    fail "다른 스모크가 방금 잠금(${LOCK_DIR})을 넘겨받았다. 그것이 끝난 뒤 다시 실행해라"
+  fi
+  echo "=== 끝난 스모크(PID ${holder})가 남긴 잠금을 넘겨받는다"
+  # 여기서부터 실패하면 넘겨받기 잠금을 풀고 멈춘다. 쥔 채 멈추면 뒤의 스모크가 모두 멈춘다.
+  rm -f "$LOCK_DIR/pid" 2>/dev/null || true
+  if ! rmdir "$LOCK_DIR" 2>/dev/null; then
+    rmdir "$TAKEOVER_DIR" 2>/dev/null || true
+    fail "끝난 스모크가 남긴 잠금(${LOCK_DIR})을 지우지 못했다(권한이 없거나 다른 파일이 있다). 도는 스모크가 없는지 확인한 뒤 그 폴더를 지우고 다시 실행해라"
+  fi
+  if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    rmdir "$TAKEOVER_DIR" 2>/dev/null || true
+    fail "다른 스모크가 방금 잠금(${LOCK_DIR})을 얻었다. 그것이 끝난 뒤 다시 실행해라"
+  fi
+  echo "$$" >"$LOCK_DIR/pid"
+  rmdir "$TAKEOVER_DIR" 2>/dev/null || true
+}
+
+release_lock() {
+  rm -f "$LOCK_DIR/pid"
+  rmdir "$LOCK_DIR" 2>/dev/null || true
+}
+
+cleanup() {
+  local status=$?
+  trap - EXIT
+  if [ "$status" -ne 0 ]; then
+    echo >&2
+    echo "=== 컨테이너 상태" >&2
+    compose ps --all >&2 || true
+    echo "=== compose 로그(끝부분)" >&2
+    compose logs --no-color --tail 60 >&2 || true
+  fi
+  echo "=== ${PROJECT} 프로젝트를 볼륨까지 내린다"
+  if ! compose down --volumes --remove-orphans --rmi local >/dev/null 2>&1; then
+    echo "경고: ${PROJECT}를 내리지 못했다. 'docker compose -p ${PROJECT} down --volumes'로 직접 내려라." >&2
+  fi
+  release_lock
+  exit "$status"
+}
+
+command -v docker >/dev/null 2>&1 || fail "docker 명령을 찾을 수 없다"
+command -v curl >/dev/null 2>&1 || fail "curl 명령을 찾을 수 없다"
+docker info >/dev/null 2>&1 || fail "Docker에 닿을 수 없다. Docker Desktop을 켠 뒤 다시 실행해라"
+
+# 잠금을 얻지 못하면 정리(cleanup)를 걸기 전에 끝난다. 다른 스모크의 컨테이너와 잠금을 건드리지 않는다.
+acquire_lock
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# 지난 실행이 중간에 끊겨 남은 컨테이너와 볼륨을 지운다. 남은 볼륨에 마이그레이션이 이미 적용되어
+# 있으면, 이번 마이그레이션이 아무 일도 하지 않고 성공해서 확인이 약해진다.
+compose down --volumes --remove-orphans >/dev/null 2>&1 || true
+
+echo "=== 이미지를 빌드하고 db, migrate, api를 띄운다"
+up_status=0
+compose up --build --detach --wait --wait-timeout 300 || up_status=$?
+
+# (1) migrate가 종료 코드 0으로 끝났다.
+migrate_id=$(compose ps --all --quiet migrate 2>/dev/null || true)
+if [ -z "$migrate_id" ]; then
+  fail "(1) migrate 컨테이너가 만들어지지 않았다. compose up이 종료 코드 ${up_status}로 끝났다(이미지 빌드나 db의 준비에서 멈췄을 수 있다)"
+fi
+migrate_state=$(docker inspect --format '{{.State.Status}} {{.State.ExitCode}}' "$migrate_id") \
+  || fail "(1) migrate 컨테이너의 상태를 읽지 못했다"
+[ "$migrate_state" = "exited 0" ] \
+  || fail "(1) migrate가 종료 코드 0으로 끝나지 않았다(상태와 종료 코드: ${migrate_state})"
+ok "(1) migrate가 종료 코드 0으로 끝났다"
+
+[ "$up_status" -eq 0 ] \
+  || fail "compose up이 종료 코드 ${up_status}로 끝났다. api가 healthy가 되지 못했을 수 있다"
+
+# (2) 데이터베이스에 vector 확장이 있다. 서버 이미지로 실행한 마이그레이션이 데이터베이스에 닿았다는
+# 증거다. /api/health는 데이터베이스를 보지 않는다(docs/DECISIONS.md의 D-39).
+vector_version=$(compose exec -T db psql -U "$DB_USER" -d "$DB_NAME" -tAc "$VECTOR_QUERY") \
+  || fail "(2) db에 질의하지 못했다"
+[ -n "$vector_version" ] || fail "(2) 데이터베이스에 vector 확장이 없다"
+ok "(2) 데이터베이스에 vector 확장이 있다(버전 ${vector_version})"
+
+# (3) 호스트에서 요청한 /api/health가 정확히 {"status":"ok"}이다.
+api_address=$(compose port api 8080) || fail "(3) api의 호스트 포트를 알아내지 못했다"
+api_address=${api_address%%$'\n'*}
+api_port=${api_address##*:}
+case "$api_port" in
+  '' | *[!0-9]*) fail "(3) api의 호스트 포트를 알아내지 못했다(${api_address})" ;;
+esac
+health_body=$(curl --silent --show-error --fail --max-time 10 "http://127.0.0.1:${api_port}/api/health") \
+  || fail "(3) 호스트에서 /api/health를 요청하지 못했다(포트 ${api_port})"
+[ "$health_body" = "$HEALTH_BODY" ] \
+  || fail "(3) /api/health의 본문이 ${HEALTH_BODY}가 아니다: ${health_body}"
+ok "(3) 호스트에서 요청한 /api/health가 ${HEALTH_BODY}이다"
+
+# (4) api 컨테이너의 프로세스가 root가 아니다. 서버 프로세스(PID 1)의 실제, 유효, 저장, 파일시스템
+# uid를 모두 본다.
+api_uids=$(compose exec -T api python -c 'print(*open("/proc/1/status").read().split("Uid:")[1].split()[:4])') \
+  || fail "(4) api 컨테이너의 프로세스 uid를 읽지 못했다"
+[ -n "$api_uids" ] || fail "(4) api 컨테이너의 프로세스 uid를 읽지 못했다"
+for uid in $api_uids; do
+  [ "$uid" != "0" ] || fail "(4) api 컨테이너의 프로세스가 root로 돈다(Uid: ${api_uids})"
+done
+ok "(4) api 컨테이너의 프로세스가 root가 아니다(Uid: ${api_uids})"
+
+# (5) api 이미지 안에 .env 파일이 없다. 작업 폴더만이 아니라 파일 시스템 전체를 본다. 서버 프로세스의
+# 사용자로는 root만 읽을 수 있는 폴더(/root 등)를 볼 수 없으므로 root로 찾는다.
+env_files=$(compose exec -T --user 0 api python -c "$ENV_FILE_SEARCH" /) \
+  || fail "(5) api 컨테이너에서 .env 파일을 찾지 못했다"
+[ -z "$env_files" ] || fail "(5) api 이미지 안에 .env 파일이 있다: ${env_files}"
+ok "(5) api 이미지 안에 .env 파일이 없다"
+
+echo "스모크 통과: 다섯 가지를 모두 확인했다"

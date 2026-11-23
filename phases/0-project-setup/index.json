@@ -1,0 +1,64 @@
+{
+  "project": "Diegesis BE",
+  "phase": "0-project-setup",
+  "steps": [
+    {
+      "step": 0,
+      "name": "app-skeleton",
+      "status": "completed",
+      "started_at": "2026-11-23T11:07:07+0900",
+      "summary": "fastapi·uvicorn·pydantic-settings(+dev httpx)를 추가하고, PORT·LOG_LEVEL·DATABASE_URL만 읽는 설정 클래스(app/core/config.py, .env의 미선언 값 무시, 환경변수 우선, get_settings 캐시), 설정을 읽지 않는 create_app()(OpenAPI /api/openapi.json, 문서 /api/docs, 기본 경로 닫음), python -m app 진입점(0.0.0.0, 설정의 port·log_level)을 만들고 TC-0.1.1~0.1.5 테스트 25개를 둔다",
+      "completed_at": "2026-11-23T11:13:35+0900"
+    },
+    {
+      "step": 1,
+      "name": "database",
+      "status": "completed",
+      "started_at": "2026-11-23T11:13:55+0900",
+      "summary": "sqlalchemy[asyncio]·asyncpg·alembic·pgvector(+dev testcontainers·pytest-asyncio·pyyaml)를 추가하고, compose.yaml에 db 서비스(pgvector 버전과 PG 주 버전이 박힌 태그, DB_PORT, 이름 있는 볼륨, pg_isready)를, import 시 설정을 읽지 않는 create_engine(url=None→설정)·create_session_factory(app/core/database.py)를, 주소를 ini에 적지 않는 비동기 Alembic(env.py는 넘겨받은 sqlalchemy.url 우선)과 vector 확장만 켜는 첫 마이그레이션을, compose.yaml에서 이미지를 읽어 testcontainers로 띄우고 Docker가 없으면 skip 대신 오류를 내는 tests/support/postgres.py와 세션 fixture(postgres_container, database_url — autouse 아님)를 두고 TC-0.2.1~0.2.5 테스트 6개(integration 4, unit 2)를 둔다",
+      "completed_at": "2026-11-23T11:27:17+0900"
+    },
+    {
+      "step": 2,
+      "name": "error-format",
+      "status": "completed",
+      "started_at": "2026-11-23T11:27:42+0900",
+      "summary": "app/core/errors.py에 AppError(status_code, code, message, detail=None)와 register_error_handlers를 두고 create_app()이 부르게 해서, AppError는 그 값대로, 요청 검증 실패는 400 VALIDATION_ERROR와 detail=[{field(위치를 뺀 점 경로, 예: item.price·extras.0.price), reason}]로, FastAPI·Starlette의 HTTP 예외는 401 NOT_AUTHENTICATED·404 NOT_FOUND·405 METHOD_NOT_ALLOWED와 그 밖의 상태는 HTTPStatus 이름으로(한국어 message, 예외의 detail은 버리고 Allow 같은 헤더는 유지), 처리되지 않은 예외는 500 INTERNAL_ERROR로(응답에 예외 내용 없음, logger.exception으로 스택을 로그에) 내보내며 detail은 None이면 키를 뺀다. RED 커밋 뒤 tests/core/test_errors.py에 TC-0.3.1~0.3.5 테스트 18개를 둔다. API.md에 대한 메모: 400과 403은 표에 있는 상태라서 HTTPException(400/403)이 HTTPStatus 이름(BAD_REQUEST/FORBIDDEN)으로 나가는 경우를 2.3절이 다루지 않는다 — 기능 코드는 그 둘을 AppError로 던져야 한다",
+      "completed_at": "2026-11-23T11:33:35+0900"
+    },
+    {
+      "step": 3,
+      "name": "health-router",
+      "status": "completed",
+      "started_at": "2026-11-23T11:33:57+0900",
+      "summary": "app/health/에 __init__.py, schemas.py(HealthResponse: status: Literal[\"ok\"] 하나 — OpenAPI에 enum/const \"ok\"로 드러남), router.py(APIRouter(prefix=\"/api\"), GET /health가 HealthResponse(status=\"ok\")를 돌려줌, 데이터베이스·설정·외부 서비스 접근 없음)를 두고 create_app()이 register_error_handlers 뒤에 include_router로 등록한다(main.py에는 경로 정의 없음). RED 커밋 뒤 tests/health/test_router.py에 TC-0.4.1~0.4.3 테스트 5개(본문 == {\"status\": \"ok\"}, 접두사 없는 /health는 404, DATABASE_URL을 127.0.0.1:1로 두고 캐시를 비운 뒤 raise_server_exceptions=False로 200 확인, OpenAPI의 get과 응답 스키마 status∈{\"ok\"}, POST는 405 METHOD_NOT_ALLOWED와 Allow: GET)를 두고, SELECT 1·db 키 추가·접두사 없음·에러 처리기 미등록의 네 변형이 모두 빨개지는 것을 확인했다",
+      "completed_at": "2026-11-23T11:37:29+0900"
+    },
+    {
+      "step": 4,
+      "name": "container",
+      "status": "completed",
+      "started_at": "2026-11-23T11:37:51+0900",
+      "summary": "멀티 스테이지 Dockerfile(python:<.python-version>-slim 두 단계, ghcr.io/astral-sh/uv:0.12.6에서 uv 복사, uv sync --locked --no-dev --no-install-project, 실행 단계는 가상환경·app/·migrations/·alembic.ini만 복사, USER 10001:10001, EXPOSE 8080, CMD [\"python\",\"-m\",\"app\"]), .env·.env.*·.venv·.git·phases·docs·tests·scripts·var·캐시를 빼는 .dockerignore, *.sh text eol=lf의 .gitattributes, compose.yaml에 migrate(build ., alembic upgrade head, db healthy 뒤, DATABASE_URL 호스트 db)와 api(build ., migrate 성공 뒤, ${API_PORT:-8080}:8080, python urllib로 /api/health를 부르는 healthcheck, 같은 DATABASE_URL)를 더하고, scripts/compose-smoke.sh(readonly PROJECT=diegesis-smoke·인자 거부·-p 고정, --env-file /dev/null, API_PORT=DB_PORT=0으로 Docker가 빈 포트 선택, up --build --wait로 compose만 빌드, migrate exited 0·pg_extension의 vector·호스트 /api/health 본문 == {\"status\":\"ok\"}·PID 1의 uid 넷 모두 ≠0·작업 폴더 .env 없음을 확인, 실패 시 항목과 compose 로그 끝부분 출력, trap으로 down --volumes --remove-orphans --rmi local)를 두었다. RED 커밋 뒤 tests/infra/에 TC-0.5.2~0.5.5 테스트 54개(가짜 docker를 앞세워 COMPOSE_PROJECT_NAME 등을 바꿔도 모든 compose 호출이 -p diegesis-smoke인지 실행으로 확인, api와 migrate의 DATABASE_URL이 같은지도 확인)를 두고 반증 조건 전부가 빨개지는 것을 확인했다. 스모크는 실제로 통과(약 45초)했고, migrate의 호스트를 틀리면 종료 코드 1로 끝났다. 메모: api의 DATABASE_URL만 틀리면 서버가 데이터베이스에 접속하지 않으므로(D-39) 스모크는 초록이다 — 그 경우는 단위 테스트(호스트 db, migrate와 같은 주소)가 잡는다",
+      "completed_at": "2026-11-23T11:52:35+0900"
+    },
+    {
+      "step": 5,
+      "name": "readme",
+      "status": "completed",
+      "started_at": "2026-11-23T11:53:02+0900",
+      "summary": "README.md만 고쳤다: 현재 상태(헬스체크만 있고 기능은 없음), 개발 환경(Docker Desktop을 켜 두는 이유), 새 절 '로컬에서 서버 띄우기'(docker compose up --build -d --wait, 브라우저로 /api/health·/api/docs 확인, ps -a·logs --tail 50 api·logs migrate·down, migrate가 Exited (0)인 것이 정상(D-40), 볼륨에 데이터가 남고 down -v는 되돌릴 수 없음, API_PORT·DB_PORT를 zsh/bash와 PowerShell 두 문법으로, compose에는 .env가 필요 없음(CONFIGURATION.md 2절), compose로만 빌드(D-41, DEVELOPMENT.md 1절), CPU 아키텍처 설정 불필요와 Docker Hub의 amd64 이미지는 배포용(D-37)), 폴더 구조(compose.yaml·Dockerfile·.dockerignore·alembic.ini)를 더했고 버전·Docker Hub 이름·docker build 안내는 없다. 적힌 그대로 실행해 확인: up 종료 코드 0(약 15초), /api/health 본문 {\"status\":\"ok\"}·/api/docs 200, ps -a에 migrate Exited (0), logs 두 명령 종료 코드 0, down 뒤 볼륨이 남고 API_PORT=8081 DB_PORT=5433으로 다시 띄워도 system_identifier가 같아 데이터가 남는 것과 8081 헬스체크를 확인, 마지막에 down, scripts/check.sh 종료 코드 0(196 passed). 실행하지 못한 것: PowerShell 줄(이 Mac에 pwsh 없음), down -v(가드). 메모: 처음엔 logs -f api와 Ctrl+C를 안내했으나 헤드리스에서 SIGINT로 끝나는지 확인할 수 없어(TTY 없이 docker와 compose 플러그인 모두 SIGINT 뒤 10초 넘게 살아 있었음) 끝나는 --tail 50으로 바꿨다. 고칠 곳 후보: 개발 환경의 scripts/check.sh는 bash 스크립트라 Windows PowerShell에서는 돌지 않는다 — Git Bash나 WSL 안내가 DEVELOPMENT.md 1절에 필요한지 사람이 판단해야 한다",
+      "completed_at": "2026-11-23T12:04:33+0900"
+    },
+    {
+      "step": 6,
+      "name": "ci-workflow",
+      "status": "completed",
+      "started_at": "2026-11-23T12:04:56+0900",
+      "summary": ".github/workflows/ci.yml을 두고 .gitkeep을 지웠다: main을 향한 pull_request와 main의 push에서만 돌고, 최상위 permissions는 contents: read 하나, concurrency는 PR만 이전 실행을 취소하고 main의 push는 run_id 그룹이라 대기 중에도 취소되지 않는다. job은 check(checkout@v7 persist-credentials false, setup-uv의 version을 Dockerfile의 uv 이미지와 같게 고정, uv sync --locked, scripts/check.sh — 검사 명령은 따로 적지 않음), compose-smoke(scripts/compose-smoke.sh), image(needs check·compose-smoke, setup-buildx@v4, PR은 build-push@v7로 linux/amd64를 태그·secrets·vars 없이 빌드만, main의 push는 env로 받은 DOCKERHUB_IMAGE가 비면 등록할 variable 하나와 secrets 둘을 출력하고 실패하는 확인 → login-action@v4(secrets.DOCKERHUB_USERNAME·TOKEN) → build-push(push: true, vars.DOCKERHUB_IMAGE:latest와 :sha-<github.sha>)), continue-on-error 없음. actionlint-py를 dev 의존성에 더했다. RED 커밋 뒤 tests/infra/test_workflow.py에 30개(TC-0.7.1~0.7.5: on 키를 True로도 읽음, branches 밖의 거름망 금지, 모든 job의 run에서 ruff·pyright·pytest 금지, uv 버전을 Dockerfile과 workflow 양쪽에서 읽어 비교, 로그인·push 조건은 && 로 이은 event_name==push·ref==main 두 항만 인정, PR에서 도는 step의 secrets·vars 참조 금지, secrets·vars는 허용한 이름만, 확인 스크립트를 bash로 실제 실행, actionlint를 -shellcheck= -pyflakes=로 실행하고 없으면 fail, 깨진 workflow는 actionlint가 거부하는지도 확인 — 그 밖에 main push 취소 금지, action은 버전 태그)를 두었다. 반증 21가지(pytest 추가, uv 버전 차이, needs 삭제, PR에서 push, || 로 넓힌 조건, arm64 추가, 이미지 이름·토큰 문자열, pull_request_target, cancel-in-progress: true 등)가 모두 빨개지고 actionlint를 치우면 skip 없이 실패하는 것을 확인했다. AC: pytest 30 passed, actionlint 종료 코드 0, scripts/check.sh 종료 코드 0(226 passed), compose-smoke 통과(약 17초), git 사용자 정보가 없는 CI 실행기를 흉내 낸 환경(user.useConfigOnly)에서 scripts·tests/infra 통과. 실행하지 못한 것: GitHub에서의 실제 실행(첫 PR에서 확인). 메모: astral-sh/setup-uv는 v8부터 주 버전 태그를 두지 않아 정확한 태그 v10.4.0으로 고정했다(나머지는 주 버전 태그 checkout@v7·setup-buildx@v4·login@v4·build-push@v7). sha 태그는 40자 전체 sha다. main의 push끼리 취소하지 않으므로 연달아 합치면 latest가 나중에 끝난 실행의 커밋을 가리킬 수 있다(sha 태그는 정확). actionlint-py는 sdist뿐이라 설치할 때 GitHub release에서 actionlint 바이너리를 받는다(CI의 uv sync도 같다). 고칠 곳 후보: ADR-009와 DEVELOPMENT.md에 actionlint가 개발 도구로 적혀 있지 않다",
+      "completed_at": "2026-11-23T12:15:48+0900"
+    }
+  ],
+  "created_at": "2026-11-23T11:07:07+0900",
+  "completed_at": "2026-11-23T12:16:11+0900"
+}

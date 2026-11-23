@@ -83,6 +83,10 @@ expect allow "$P/app/core/database.py"            "엔진 조립"
 expect deny  "$P/app/music/main.py"               "main.py 예외는 app/main.py뿐이다"
 expect deny  "$P/app/music/config.py"             "config.py 예외는 app/core/config.py뿐이다"
 
+echo "개별 파일 예외"
+expect allow "$P/app/__main__.py"                 "서버 진입점(uvicorn 실행만 한다)"
+expect deny  "$P/app/music/__main__.py"           "__main__.py 예외는 app/__main__.py뿐이다"
+
 echo "app/ 밖"
 expect allow "$P/tests/music/test_router.py"      "테스트 파일 자신"
 expect allow "$P/tests/conftest.py"               "conftest"
