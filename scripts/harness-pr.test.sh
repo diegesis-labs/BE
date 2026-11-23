@@ -81,7 +81,8 @@ JSON
 > 안내 문장은 체크 항목이 아니다.
 
 - [x] 본문이 읽기 편한 단위로 끊겨 보인다
-  관찰한 값: 문단마다 끊긴다
+  - 테스트로 덮을 수 없는 이유: 읽기 편한지는 사람이 판단한다
+  - 관찰한 값: 문단마다 끊긴다
 MD
   cat >"$repo/phases/3-books/review/review-1.md" <<'MD'
 # Epic 3 코드 리뷰 — 1차
@@ -135,6 +136,9 @@ MD
   : >"$repo/docs/backlog/epic-3/testcase.md"
   (
     cd "$repo" && git init --quiet -b main && G add -A && G commit --quiet -m init &&
+      printf -- '- step 0 `books-repository`: 최종-요약-첫-줄\n  - 처분 뒤의 모습\n- step 1 `books-router`: 최종-요약-둘째-줄\n\n<!-- summary-of: %s -->\n' \
+        "$(git rev-parse HEAD)" >phases/3-books/summary.md &&
+      G add -A && G commit --quiet -m "docs(3-books): 최종 요약" &&
       git init --quiet --bare "$remote" && git remote add origin "$remote" &&
       git checkout --quiet -b feat-3-books
   ) >/dev/null 2>&1
@@ -142,6 +146,14 @@ MD
 }
 
 commit_all() { (cd "$1" && G add -A && G commit --quiet -m "fixture") >/dev/null 2>&1; }
+
+# 요약의 판독용 줄을 지금의 코드로 고쳐 커밋한다. 픽스처의 phases/ 밖을 고친 경우에 쓴다.
+refresh_summary() { # refresh_summary <레포>
+  local f="$1/phases/3-books/summary.md" of
+  of="$(git -C "$1" log -1 --format=%H -- . ':(exclude)phases')"
+  sed -i.bak "s/^<!-- summary-of: .* -->$/<!-- summary-of: $of -->/" "$f" && rm "$f.bak"
+  commit_all "$1"
+}
 
 # run <레포> <인자...> — 종료 코드를 RC에, 표준 출력을 OUT에, 표준 오류를 ERR에 둔다.
 run() {
@@ -168,7 +180,10 @@ check "push하지 않는다" "" "$(remote_branches "$R")"
 contains "제목은 Epic 문서의 title에서 온다" "제목: feat(3-books): 책 목록과 챕터 본문" "$OUT"
 contains "대상 브랜치를 알린다" "feat-3-books → main" "$OUT"
 contains "이슈를 닫는 줄이 있다" "Closes #12" "$OUT"
-contains "step의 summary를 싣는다" "step 1 \`books-router\`: 책 목록과 본문 경로" "$OUT"
+contains "만든 것은 최종 요약을 싣는다" "- step 1 \`books-router\`: 최종-요약-둘째-줄" "$OUT"
+contains "최종 요약의 하위 항목도 싣는다" "  - 처분 뒤의 모습" "$OUT"
+lacks "처분 전에 쓴 step의 summary는 싣지 않는다" "책 목록과 본문 경로" "$OUT"
+lacks "요약의 판독용 줄은 싣지 않는다" "<!-- summary-of" "$OUT"
 contains "라운드 수를 싣는다" "2라운드" "$OUT"
 contains "마지막 리뷰의 종합 판정을 싣는다" "2차-합계-줄" "$OUT"
 lacks "앞 라운드의 판정은 싣지 않는다" "**1** | **2**" "$OUT"
@@ -257,6 +272,21 @@ sed -i.bak '/disposition/d' "$R/phases/3-books/review/fix-1.md" && rm "$R/phases
 commit_all "$R"
 blocked "disposition 줄이 없는 처분 기록" "fix-1.md 끝에 disposition 줄이 없다"
 
+R="$(make_repo g-nosummary)"
+rm "$R/phases/3-books/summary.md"
+commit_all "$R"
+blocked "최종 요약 없음" "최종 요약(phases/3-books/summary.md)이 없다"
+
+R="$(make_repo g-stale)"
+echo "요약 뒤의 코드" >"$R/code.txt"
+commit_all "$R"
+blocked "요약 뒤에 코드가 바뀌었다" "최종 요약을 쓴 뒤로 코드가 바뀌었다"
+
+R="$(make_repo g-nomark)"
+sed -i.bak '/summary-of/d' "$R/phases/3-books/summary.md" && rm "$R/phases/3-books/summary.md.bak"
+commit_all "$R"
+blocked "판독용 줄이 없는 요약" "다룬 커밋을 읽을 수 없다"
+
 R="$(make_repo g-check)"
 CHECK_CMD="printf '=== 요약\npytest: exit 1\n'; exit 1" blocked "검사 실패" "검사가 실패했다"
 
@@ -282,9 +312,16 @@ run "$R" 3-books
 check "MANUAL.md가 없어도 통과" 0 "$RC"
 contains "사람이 볼 항목이 없다고 적는다" "사람이 따로 확인할 항목이 없습니다" "$OUT"
 
+R="$(make_repo ok-phases)"
+echo "- 처분 기록을 고쳤다" >>"$R/phases/3-books/review/fix-1.md"
+commit_all "$R"
+run "$R" 3-books
+check "요약 뒤에 phases/ 아래만 바뀌었으면 통과" 0 "$RC"
+
 R="$(make_repo ok-noissue)"
 sed -i.bak '/GitHub 이슈/d' "$R/docs/backlog/epic-3/E3-books.md" && rm "$R/docs/backlog/epic-3/E3-books.md.bak"
 commit_all "$R"
+refresh_summary "$R"
 run "$R" 3-books
 check "이슈 번호가 없어도 통과" 0 "$RC"
 lacks "없는 이슈를 닫는다고 적지 않는다" "Closes #" "$OUT"

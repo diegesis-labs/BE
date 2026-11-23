@@ -109,6 +109,31 @@ else:
         elif counts["minor"] and not (review_dir / f"fix-{n}.md").exists():
             bad(f"마지막 리뷰({last.name})의 minor {counts['minor']}건에 대한 처분 기록(fix-{n}.md)이 없다")
 
+# 최종 요약(scripts/harness-summary.sh). PR 본문의 "만든 것"이 이 파일이다. step의 summary는
+# 처분 전에 쓴 것이라 싣지 않는다. 요약이 다룬 커밋 뒤로 코드가 바뀌었으면 낡은 요약이다 —
+# harness-summary.sh의 summary_is_current와 같은 규칙이다. 커밋하지 않은 변경은 위의 관문이 잡는다.
+summary_rel = f"phases/{task}/summary.md"
+summary_path = root / summary_rel
+
+
+def git(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True)
+
+
+summary_text = summary_path.read_text(encoding="utf-8") if summary_path.exists() else ""
+summary_marks = re.findall(r"^<!-- summary-of: ([0-9a-f]{40}) -->\s*$", summary_text, re.MULTILINE)
+summary_body = "\n".join(line for line in summary_text.splitlines() if not line.lstrip().startswith("<!-- summary-of:"))
+if not summary_body.strip():
+    bad(f"최종 요약({summary_rel})이 없다 — scripts/harness-summary.sh {task}로 쓴다")
+elif (
+    not summary_marks
+    or git("ls-files", "--error-unmatch", "--", summary_rel).returncode != 0
+    or git("rev-parse", "--verify", "--quiet", f"{summary_marks[-1]}^{{commit}}").returncode != 0
+):
+    bad(f"최종 요약({summary_rel})이 다룬 커밋을 읽을 수 없다 — scripts/harness-summary.sh {task} --force로 다시 쓴다")
+elif git("diff", "--quiet", summary_marks[-1], "HEAD", "--", ".", ":(exclude)phases").returncode != 0:
+    bad(f"최종 요약을 쓴 뒤로 코드가 바뀌었다 — scripts/harness-summary.sh {task}로 다시 쓴다")
+
 for fix in sorted(review_dir.glob("fix-*.md")):
     waiting = marker(fix, "disposition", "needs-human")
     if waiting is None:
@@ -168,9 +193,13 @@ if issue:
 if epic_doc:
     out += [f"Epic 문서: `{epic_doc.relative_to(root)}`", ""]
 
+# 처분까지 끝난 코드를 다시 읽고 쓴 최종 요약이다(scripts/harness-summary.sh). 관문이 있는지와
+# 최신인지를 이미 확인했다. 판독용 줄은 싣지 않는다.
 out += ["## 만든 것", ""]
-for s in index["steps"]:
-    out.append(f"- step {s['step']} `{s['name']}`: {s.get('summary', '(요약 없음)')}")
+summary = (phase / "summary.md").read_text(encoding="utf-8")
+out += "\n".join(
+    line for line in summary.splitlines() if not line.lstrip().startswith("<!-- summary-of:")
+).strip().splitlines()
 out.append("")
 
 

@@ -246,6 +246,8 @@ scripts/harness-run.sh {task-name} --no-fix   # 리뷰까지만. 처분은 /revi
 
 같은 명령을 다시 돌려도(예: MANUAL.md를 체크한 뒤) 마지막 리뷰가 닫혀 있고 그 뒤로 `phases/` 밖의 코드가 바뀌지 않았으면 리뷰를 다시 띄우지 않는다. 코드가 바뀌었으면 다시 리뷰한다.
 
+**최종 요약.** 리뷰와 처분이 닫히면 harness-run.sh가 `scripts/harness-summary.sh`를 불러 `phases/{task-name}/summary.md`를 쓴다. 또 다른 별도 세션이 처분까지 끝난 코드를 다시 읽고 이 phase가 만든 것을 요약하며, PR 본문의 "만든 것"이 이 파일이다. step의 summary는 step이 끝날 때 쓴 것이라 그 뒤의 처분을 담지 못해서 PR 본문에 싣지 않는다. 파일 끝의 판독용 줄(`<!-- summary-of: <커밋> -->`)이 요약이 다룬 코드를 가리키며, 그 뒤로 `phases/` 밖이 바뀌지 않았으면 요약을 다시 쓰지 않는다. 요약을 쓰지 못해도 종료 코드는 바뀌지 않는다. 그 대신 harness-pr.sh가 PR을 막는다.
+
 리뷰와 처분의 결과는 각 파일 끝의 한 줄로 읽는다. 이 줄이 없으면 harness-run.sh는 추정하지 않고 멈춘다.
 
 ```
@@ -283,6 +285,8 @@ phase가 완료되면(종료 코드 0) PR을 준비한다.
 scripts/harness-pr.sh {task-name}            # 관문을 검사하고 PR 제목과 본문을 출력만 한다
 scripts/harness-pr.sh {task-name} --create   # 브랜치를 push하고 PR을 연다
 ```
+
+PR 본문의 "만든 것"은 최종 요약(`phases/{task-name}/summary.md`)이다. harness-run.sh가 끝난 뒤에 사람이 코드를 고쳤으면(예: "사람 판단 필요"를 정하며 고친 경우) 요약이 낡아 관문에 걸린다. 그때는 `scripts/harness-summary.sh {task-name}`으로 요약을 다시 쓴 뒤 harness-pr.sh를 다시 부른다.
 
 `--create`는 **사람이 출력된 본문을 보고 승인한 뒤에만** 붙인다. PR은 레포 밖에 보이는 행동이고, 한번 열면 닫아도 흔적이 남는다. 헤드리스 세션은 push와 PR 생성을 할 수 없다(bash-guard가 막는다).
 

@@ -21,16 +21,17 @@ flowchart TD
   X --> D
   E -- "예" --> F["5. 리뷰<br/>다섯 차원을 나누어 판정"]
   F --> G{"결함이 있는가"}
-  G -- "없음" --> J
+  G -- "없음" --> S
   G -- "있음" --> H["6. 리뷰 처분<br/>재현 테스트를 먼저 쓰고 고침"]
   H --> I{"critical이나 major가<br/>있었는가"}
   I -- "예 (최대 3라운드)" --> F
-  I -- "아니오" --> J["7. 사람의 확인<br/>MANUAL 점검표"]
-  J --> K["8. PR<br/>scripts/harness-pr.sh"]
+  I -- "아니오" --> S["7. 최종 요약<br/>처분까지 끝난 코드를 다시 읽음"]
+  S --> J["8. 사람의 확인<br/>MANUAL 점검표"]
+  J --> K["9. PR<br/>scripts/harness-pr.sh"]
   K --> L["사람이 GitHub에서 합침"]
 ```
 
-4번부터 6번까지는 `scripts/harness-run.sh` 하나가 사람 없이 이어서 실행합니다. 사람이 직접 하는 일은 1번부터 3번까지의 설계, 7번의 확인, 8번의 승인입니다.
+4번부터 7번까지는 `scripts/harness-run.sh` 하나가 사람 없이 이어서 실행합니다. 사람이 직접 하는 일은 1번부터 3번까지의 설계, 8번의 확인, 9번의 승인입니다.
 
 각 단계에서 일어나는 일은 다음과 같습니다.
 
@@ -42,8 +43,9 @@ flowchart TD
 | 4. step 실행 | step마다 새 에이전트 세션을 헤드리스로 띄워 구현하게 합니다. 실패하면 세 번까지 다시 시도하고, step이 끝날 때마다 커밋합니다. | step별 커밋 |
 | 5. 리뷰 | 구현한 세션과 무관한 새 에이전트 세션이 correctness, security, architecture, test coverage, behavioral의 다섯 차원으로 판정합니다. 이 세션은 코드를 고치지 않습니다. | `review/review-N.md` |
 | 6. 리뷰 처분 | 또 다른 새 에이전트 세션이 결함을 하나씩 대조해서, 고치거나 근거를 들어 기각하거나 사람에게 넘깁니다. | `review/fix-N.md`, 수정 커밋 |
-| 7. 사람의 확인 | 사람만 볼 수 있는 항목을 직접 확인하고 체크합니다. 항목이 없는 phase도 있습니다. | 체크된 `MANUAL.md` |
-| 8. PR | 관문을 점검하고 PR의 본문을 만듭니다. 사람이 본문을 확인한 뒤에 PR을 엽니다. | PR |
+| 7. 최종 요약 | 또 다른 새 에이전트 세션이 처분까지 끝난 코드를 다시 읽고, 이 phase가 만든 것을 요약합니다. PR 본문의 "만든 것"이 이 요약입니다. step마다 남긴 요약은 처분 전에 쓴 것이라 PR 본문에 싣지 않습니다. | `summary.md` |
+| 8. 사람의 확인 | 사람만 볼 수 있는 항목을 직접 확인하고 체크합니다. 항목이 없는 phase도 있습니다. | 체크된 `MANUAL.md` |
+| 9. PR | 관문을 점검하고 PR의 본문을 만듭니다. 사람이 본문을 확인한 뒤에 PR을 엽니다. | PR |
 
 구현, 리뷰, 처분을 서로 다른 에이전트 세션에 맡기는 이유는 자기가 한 일을 자기가 판정하지 않게 하기 위해서입니다. 구현한 세션은 자기 코드를 옳다고 보는 쪽으로 기울고, 판정한 세션이 직접 고치면 "고쳤으니 없는 문제"가 됩니다.
 
@@ -92,7 +94,11 @@ scripts/harness-run.sh 3-books
 
 `phases/<phase 이름>/MANUAL.md`의 항목을 직접 확인하고, `- [ ]`를 `- [x]`로 바꾼 뒤 그 항목 아래의 `관찰한 값`에 본 것을 적습니다. 본 것이 여러 가지면 한 단계 더 들여 쓴 목록으로 나눕니다. 그리고 커밋한 뒤 같은 명령을 다시 실행합니다. 이미 끝난 step과 리뷰는 다시 돌지 않으며, phase가 완료로 기록됩니다.
 
-처분 기록에 "사람 판단 필요"가 있으면 그 항목을 사람이 정합니다. 정한 뒤에는 그 항목을 처분 기록의 "고쳤다"나 "기각했다"로 옮기고, 파일 끝에 있는 `disposition` 줄의 숫자를 고칩니다.
+처분 기록에 "사람 판단 필요"가 있으면 그 항목을 사람이 정합니다. 정한 뒤에는 그 항목을 처분 기록의 "고쳤다"나 "기각했다"로 옮기고, 파일 끝에 있는 `disposition` 줄의 숫자를 고칩니다. 정하면서 코드를 고쳤으면 최종 요약이 낡으므로, PR 전에 요약을 다시 씁니다.
+
+```bash
+scripts/harness-summary.sh 3-books   # 요약이 다룬 코드가 지금과 같으면 아무것도 하지 않습니다.
+```
 
 ### 2.5 PR
 
@@ -101,7 +107,7 @@ scripts/harness-pr.sh 3-books            # 점검하고 본문을 보여 주기�
 scripts/harness-pr.sh 3-books --create   # 브랜치를 올리고 PR을 엽니다.
 ```
 
-먼저 `--create` 없이 실행해서 본문을 확인합니다. 문제가 없으면 `--create`를 붙여 다시 실행합니다. PR을 합치는 방식은 [DEVELOPMENT.md 6.3절](DEVELOPMENT.md#63-pr)에 있습니다.
+먼저 `--create` 없이 실행해서 본문을 확인합니다. 문제가 없으면 `--create`를 붙여 다시 실행합니다. 본문의 "만든 것"은 최종 요약입니다. 요약이 없거나 요약을 쓴 뒤로 코드가 바뀌었으면 관문에 걸리며, 그때는 `scripts/harness-summary.sh`로 요약을 다시 씁니다. PR을 합치는 방식은 [DEVELOPMENT.md 6.3절](DEVELOPMENT.md#63-pr)에 있습니다.
 
 PR이 합쳐진 뒤에는 Orca에서 그 worktree를 정리합니다.
 
@@ -119,6 +125,7 @@ scripts/
   check.sh                      # 검사 명령
   harness-worktree.sh           # worktree 만들기
   harness-run.sh                # step 실행, 리뷰, 처분
+  harness-summary.sh            # 최종 요약
   execute.py                    # step을 순서대로 실행
   harness-pr.sh                 # PR 준비
   hooks/                        # 가드
@@ -132,6 +139,7 @@ phases/
     index.json                  # step의 상태와 요약
     step0.md, step1.md, ...     # step 파일
     MANUAL.md                   # 사람이 확인하는 점검표 (있을 때만)
+    summary.md                  # 최종 요약, PR 본문의 "만든 것"
     review/review-1.md          # 리뷰 리포트
     review/fix-1.md             # 리뷰 처분 기록
 ```
@@ -148,6 +156,7 @@ harness는 아래 형식으로 커밋을 만듭니다. 범위에는 phase의 이
 | step이 끝났을 때의 상태 기록 | `chore(<phase>): step <번호> output` | `chore(3-books): step 1 output` |
 | 리뷰가 끝났을 때 | `docs(<phase>): <N>차 리뷰 리포트 — critical <a> · major <b> · minor <c>` | `docs(3-books): 1차 리뷰 리포트 — critical 0 · major 1 · minor 2` |
 | 처분하는 동안 | `test(<phase>): RED — …`, `fix(<phase>): …`, `docs(<phase>): …` | `fix(3-books): 1차 리뷰 SEC-1 — 챕터 경로에 허용 목록 확인을 건다` |
+| 최종 요약을 썼을 때 | `docs(<phase>): 최종 요약` | `docs(3-books): 최종 요약` |
 | phase가 완료됐을 때 | `chore(<phase>): mark phase completed` | `chore(3-books): mark phase completed` |
 
 ## 4. 환경 변수와 의존
@@ -156,7 +165,7 @@ harness는 아래 형식으로 커밋을 만듭니다. 범위에는 phase의 이
 
 | 이름 | 뜻 | 기본값 |
 | --- | --- | --- |
-| `HARNESS_MODEL` | 헤드리스로 띄우는 에이전트 세션의 모델입니다. step 실행, 리뷰, 처분에 모두 적용됩니다. | `claude-opus-5-5` |
+| `HARNESS_MODEL` | 헤드리스로 띄우는 에이전트 세션의 모델입니다. step 실행, 리뷰, 처분, 최종 요약에 모두 적용됩니다. | `claude-opus-5-5` |
 | `HARNESS_MAX_REVIEW_ROUNDS` | 리뷰와 처분을 되풀이하는 최대 횟수입니다. | `3` |
 
 ```bash
@@ -170,7 +179,7 @@ HARNESS_MODEL=claude-sonnet-5-5 scripts/harness-run.sh 3-books
 | 이름 | 넣는 때 | 가드의 동작 |
 | --- | --- | --- |
 | `HARNESS_RUN` | step 실행과 리뷰 처분 | 가드와 검사 설정을 고치지 못하게 하고, 백그라운드 실행과 push를 막습니다. |
-| `HARNESS_REVIEW` | 리뷰 | 종료 검사를 건너뛰고, 백그라운드 실행과 push를 막습니다. |
+| `HARNESS_REVIEW` | 리뷰와 최종 요약 | 종료 검사를 건너뛰고, 백그라운드 실행과 push를 막습니다. |
 
 ### 4.3 필요한 도구
 

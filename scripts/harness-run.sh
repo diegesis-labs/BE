@@ -7,7 +7,8 @@
 #   사람이 대화형 세션에서 했다. 여기서는 처분까지 무인으로 돌린다.
 #
 #   흐름: execute.py → 리뷰(review-N.md) → 처분(fix-N.md) → critical·major가 있었으면 재리뷰 …
-#   최대 HARNESS_MAX_REVIEW_ROUNDS(기본 3) 라운드. --no-fix를 주면 원본처럼 리뷰까지만 한다.
+#   최대 HARNESS_MAX_REVIEW_ROUNDS(기본 3) 라운드. 닫히면 최종 요약(summary.md,
+#   scripts/harness-summary.sh)을 쓴다. --no-fix를 주면 원본처럼 리뷰까지만 한다.
 #
 #   종료 코드: execute.py의 코드(0~5)를 그대로 낸다. 6은 이 스크립트가 더한 것이다 —
 #   리뷰와 처분이 닫히지 않아 사람이 봐야 한다(.claude/commands/harness.md의 종료 코드표).
@@ -321,4 +322,13 @@ if [ "$waiting" -gt 0 ]; then
 fi
 
 echo "harness-run: 리뷰와 처분이 닫혔다 (execute.py 종료 코드 $code)."
+
+# PR 본문의 "만든 것"은 step의 summary가 아니라, 처분까지 끝난 코드를 별도 세션이 다시 읽고 쓴
+# 최종 요약이다. 요약이 최신이면 세션을 띄우지 않는다. 요약을 쓰지 못해도 종료 코드는 바꾸지
+# 않는다 — 리뷰와 처분은 닫혔고, harness-pr.sh의 관문이 최신 요약 없이는 PR을 막는다.
+summary_args=()
+[ -n "$review_base" ] && summary_args=(--base "$review_base")
+if ! bash "$ROOT/scripts/harness-summary.sh" "$task" ${summary_args[@]+"${summary_args[@]}"}; then
+  echo "harness-run: ⚠ 최종 요약(phases/$task/summary.md)을 쓰지 못했다. PR 전에 scripts/harness-summary.sh $task 를 다시 돌려라." >&2
+fi
 exit "$code"
