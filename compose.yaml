@@ -1,0 +1,31 @@
+# 로컬에서 데이터베이스를 띄운다. 마이그레이션과 서버 서비스는 Epic 0의 step 4가 더한다.
+#
+# - `platform:`과 `env_file`을 적지 않는다. 각 컴퓨터가 자기 CPU 아키텍처의 이미지를 쓰고,
+#   개발자의 `.env`에 든 주소가 컨테이너 안의 주소를 덮어쓰면 안 되기 때문이다.
+# - `db`의 이미지는 통합 테스트(tests/support/postgres.py)가 이 파일에서 읽어 쓴다.
+#   이미지의 이름과 버전은 여기에만 적는다(docs/DEVELOPMENT.md 1절).
+
+services:
+  db:
+    # pgvector 확장의 버전과 PostgreSQL의 주 버전이 모두 박힌 태그를 쓴다.
+    # 확장의 버전이 바뀌면 벡터 검색의 동작이 바뀌기 때문이다.
+    image: pgvector/pgvector:0.8.7-pg19
+    environment:
+      # 로컬에서만 쓰는 값이다. docs/CONFIGURATION.md 3.2절의 예시 주소와 같다.
+      POSTGRES_USER: diegesis
+      POSTGRES_PASSWORD: diegesis
+      POSTGRES_DB: diegesis
+    ports:
+      # 로컬에 설치한 PostgreSQL이 5432를 쓰고 있으면 DB_PORT로 바꾼다.
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      # PostgreSQL 18부터 이미지의 데이터 경로가 /var/lib/postgresql 아래로 바뀌었다.
+      - db-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U diegesis -d diegesis"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  db-data:

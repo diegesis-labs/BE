@@ -13,7 +13,9 @@
     {
       "step": 1,
       "name": "database",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-11-23T11:13:55+0900",
+      "summary": "sqlalchemy[asyncio]·asyncpg·alembic·pgvector(+dev testcontainers·pytest-asyncio·pyyaml)를 추가하고, compose.yaml에 db 서비스(pgvector 버전과 PG 주 버전이 박힌 태그, DB_PORT, 이름 있는 볼륨, pg_isready)를, import 시 설정을 읽지 않는 create_engine(url=None→설정)·create_session_factory(app/core/database.py)를, 주소를 ini에 적지 않는 비동기 Alembic(env.py는 넘겨받은 sqlalchemy.url 우선)과 vector 확장만 켜는 첫 마이그레이션을, compose.yaml에서 이미지를 읽어 testcontainers로 띄우고 Docker가 없으면 skip 대신 오류를 내는 tests/support/postgres.py와 세션 fixture(postgres_container, database_url — autouse 아님)를 두고 TC-0.2.1~0.2.5 테스트 6개(integration 4, unit 2)를 둔다"
     },
     {
       "step": 2,
