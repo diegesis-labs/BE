@@ -1,0 +1,13 @@
+{
+  "project": "Diegesis BE",
+  "phase": "0-project-setup",
+  "steps": [
+    { "step": 0, "name": "app-skeleton", "status": "pending" },
+    { "step": 1, "name": "database", "status": "pending" },
+    { "step": 2, "name": "error-format", "status": "pending" },
+    { "step": 3, "name": "health-router", "status": "pending" },
+    { "step": 4, "name": "container", "status": "pending" },
+    { "step": 5, "name": "readme", "status": "pending" },
+    { "step": 6, "name": "ci-workflow", "status": "pending" }
+  ]
+}

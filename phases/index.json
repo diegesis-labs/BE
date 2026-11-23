@@ -1,1 +1,8 @@
-{"phases": []}
+{
+  "phases": [
+    {
+      "dir": "0-project-setup",
+      "status": "pending"
+    }
+  ]
+}
