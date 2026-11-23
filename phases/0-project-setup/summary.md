@@ -38,10 +38,10 @@
   - 새 커밋이 온 PR의 이전 실행은 취소하지만, `main`의 push는 그 커밋의 이미지가 빠지지 않도록 취소하지 않습니다.
   - 테스트가 개발 의존성으로 설치한 actionlint로 workflow를 검사하며, actionlint가 없으면 건너뛰지 않고 실패합니다.
 - 그 밖에
-  - Epic 0 문서와 테스트 케이스를 더하고, 설계에서 정한 결정을 D-36~D-41과 ADR-011(통합 테스트용 데이터베이스는 testcontainers로 띄운다)로 기록했습니다.
-  - API.md 2.3절에는 검증 오류의 `field` 규칙을, INFRA.md 3.7절에는 이미지를 올리기까지의 흐름과 GitHub에 등록할 값의 이름을 적는 등, 기존 문서를 Epic 0에서 만든 것에 맞게 고쳤습니다.
-  - `scripts/hooks/bash-guard.sh`는 헤드리스 세션에서 이미지 push와 레지스트리 로그인(`docker push`, `docker login`, compose push, `--push` 빌드)을 막으며, 이 규칙이 놓치는 형태와 오탐은 주석에 적었습니다.
-  - `scripts/hooks/tdd-guard.sh`는 uvicorn을 띄우기만 하는 `app/__main__.py`를 테스트를 먼저 쓰지 않아도 되는 파일로 둡니다.
-  - `scripts/harness-summary.sh`가 리뷰와 처분이 닫힌 뒤 별도 세션으로 최종 요약(`summary.md`)을 쓰고, `scripts/harness-pr.sh`는 그 요약을 PR 본문의 "만든 것"에 실으며 요약이 없거나 낡았으면 PR을 막습니다.
+  - Epic 0 문서와 테스트 케이스를 더하고 설계에서 정한 결정을 D-36~D-41과 ADR-011(통합 테스트용 데이터베이스는 testcontainers로 띄운다)로 기록했으며, API.md 2.3절의 검증 오류 `field` 규칙과 INFRA.md 3.7절의 이미지를 올리기까지의 흐름처럼 기존 문서를 Epic 0에서 만든 것에 맞게 고쳤습니다.
+  - 헤드리스 세션에서 `scripts/hooks/bash-guard.sh`는 이미지 push와 레지스트리 로그인(`docker push`, `docker login`, compose push, `--push` 빌드)을 막고, `scripts/hooks/tdd-guard.sh`는 uvicorn을 띄우기만 하는 `app/__main__.py`를 테스트를 먼저 쓰지 않아도 되는 파일로 둡니다.
+  - `scripts/harness-run.sh`는 리뷰와 처분이 닫히면 `scripts/harness-summary.sh`로 처분까지 끝난 코드의 최종 요약(`summary.md`)을 별도 세션에 쓰게 하고, `scripts/harness-pr.sh`는 요약이 없거나 요약을 쓴 뒤로 코드가 바뀌었으면 PR을 막습니다.
+  - `scripts/harness-pr.sh`가 만드는 PR 본문은 "만든 것"에 그 최종 요약을 싣고, "리뷰와 처분" 절에는 라운드마다 리뷰가 찾은 결함과 고침·기각·사람 판단 필요의 수를 한 줄씩 실어 처분 뒤의 상태를 보여 줍니다.
+  - phase-review 스킬의 차원별 전례에 Epic 0에서 찾은 결함을 더했고, harness 절차 문서는 MANUAL 점검표의 항목에 딸린 내용을 하위 목록으로 쓰게 합니다.
 
-<!-- summary-of: 284ee65458bd6f8e920a2528cc81c7d318553f8d -->
+<!-- summary-of: 151b45e7b51a9643d9ffbe5c565842f16cab885d -->
