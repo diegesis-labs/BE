@@ -29,7 +29,9 @@
     {
       "step": 3,
       "name": "health-router",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-11-23T11:33:57+0900",
+      "summary": "app/health/에 __init__.py, schemas.py(HealthResponse: status: Literal[\"ok\"] 하나 — OpenAPI에 enum/const \"ok\"로 드러남), router.py(APIRouter(prefix=\"/api\"), GET /health가 HealthResponse(status=\"ok\")를 돌려줌, 데이터베이스·설정·외부 서비스 접근 없음)를 두고 create_app()이 register_error_handlers 뒤에 include_router로 등록한다(main.py에는 경로 정의 없음). RED 커밋 뒤 tests/health/test_router.py에 TC-0.4.1~0.4.3 테스트 5개(본문 == {\"status\": \"ok\"}, 접두사 없는 /health는 404, DATABASE_URL을 127.0.0.1:1로 두고 캐시를 비운 뒤 raise_server_exceptions=False로 200 확인, OpenAPI의 get과 응답 스키마 status∈{\"ok\"}, POST는 405 METHOD_NOT_ALLOWED와 Allow: GET)를 두고, SELECT 1·db 키 추가·접두사 없음·에러 처리기 미등록의 네 변형이 모두 빨개지는 것을 확인했다"
     },
     {
       "step": 4,

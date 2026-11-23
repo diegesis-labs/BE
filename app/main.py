@@ -8,6 +8,7 @@
 from fastapi import FastAPI
 
 from app.core.errors import register_error_handlers
+from app.health.router import router as health_router
 
 
 def create_app() -> FastAPI:
@@ -21,6 +22,7 @@ def create_app() -> FastAPI:
     )
     # 모든 에러 응답을 {code, message, detail} 형식으로 바꾼다(docs/API.md 2.3절).
     register_error_handlers(app)
+    app.include_router(health_router)
     return app
 
 
