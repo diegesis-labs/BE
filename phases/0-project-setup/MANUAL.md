@@ -10,7 +10,7 @@
 
 GitHub의 secrets와 variable을 등록하려면 BE 레포의 Admin 권한이 필요하다(`docs/DECISIONS.md`의 D-38). 권한이 없으면 팀장에게 Admin을 받거나, 팀장이 아래 `gh` 명령을 대신 실행한다.
 
-- [ ] Docker Hub에 **공개** 저장소 `diegesis-be`를 만들고, Read & Write 권한의 액세스 토큰을 발급했다. 그리고 BE 레포에 아래 셋을 등록했다. `gh secret list`에 `DOCKERHUB_USERNAME`과 `DOCKERHUB_TOKEN`이, `gh variable list`에 `DOCKERHUB_IMAGE`가 보이면 통과다.
+- [x] Docker Hub에 **공개** 저장소 `diegesis-be`를 만들고, Read & Write 권한의 액세스 토큰을 발급했다. 그리고 BE 레포에 아래 셋을 등록했다. `gh secret list`에 `DOCKERHUB_USERNAME`과 `DOCKERHUB_TOKEN`이, `gh variable list`에 `DOCKERHUB_IMAGE`가 보이면 통과다.
   테스트로 덮을 수 없는 이유: Docker Hub 계정과 레포의 Admin 권한은 에이전트가 닿을 수 없고, 토큰은 사람만 다뤄야 하는 비밀값이다.
   등록 명령(토큰은 명령줄에 쓰지 않고 입력 창에 붙여 넣는다):
   `gh secret set DOCKERHUB_USERNAME --repo diegesis-labs/BE`
