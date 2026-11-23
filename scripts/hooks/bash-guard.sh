@@ -92,6 +92,15 @@ if [ -n "$HEADLESS" ]; then
   # 컨테이너 이미지는 main에 합쳐진 코드만 CI가 올린다(docs/DECISIONS.md D-36). Docker Hub
   # 저장소가 공개라서 한번 올라간 이미지는 누구나 받아 간다(D-37). 로그인도 막는다 — 무인
   # 세션에 레지스트리 자격 증명이 남을 이유가 없다.
+  #
+  # 이 규칙은 에이전트의 실수를 막는 장치이며, 일부러 피해 가는 명령까지 막지는 않는다. 알고 둔 한계 둘.
+  #   - 놓치는 것: 절대 경로(/usr/local/bin/docker push), docker 뒤의 전역 옵션(--context, -H,
+  #     --config), compose build --push, buildx bake --push, manifest push, imagetools create.
+  #     이것들까지 막으려고 경계를 넓히면 아래의 오탐이 함께 늘어난다.
+  #   - 오탐: 명령 문자열 전체를 보므로 커밋 메시지나 echo 안의 'docker push' 낱말에도 막힌다.
+  #     4번의 DROP과 같은 이유로 받아들인다. 따옴표 안팎을 가르려면 셸을 파싱해야 하고, 그 틈으로
+  #     'bash -c "docker push …"' 같은 진짜 명령이 샌다. 막히면 그 낱말을 쓰지 않고 다시 적는다.
+  # (0-project-setup 1차 리뷰 COR-10 · SEC-1, 사람이 기록만 하기로 정했다)
   if has '(^|[^[:alnum:]_./-])docker[[:space:]]+(image[[:space:]]+)?push([[:space:]]|$)' \
     || has '(^|[^[:alnum:]_./-])docker[[:space:]]+login([[:space:]]|$)' \
     || has '(^|[^[:alnum:]_./-])docker([[:space:]]+|-)compose[[:space:]]+([^;&|]*[[:space:]])?push([[:space:]]|$)' \
