@@ -72,7 +72,10 @@ def test_database_fixture_without_docker_errors_instead_of_skipping(
         test_needs_database="def test_needs_database(database_url):\n    assert database_url\n"
     )
 
-    result = pytester.runpytest("-p", "no:cacheprovider")
+    # 안쪽 실행에는 레포의 pytest 설정이 없으므로, 경고가 나지 않게 이벤트 루프의 범위만 맞춘다.
+    result = pytester.runpytest(
+        "-p", "no:cacheprovider", "-o", "asyncio_default_fixture_loop_scope=function"
+    )
 
     result.assert_outcomes(errors=1, skipped=0, passed=0)
     result.stdout.fnmatch_lines(["*통합 테스트에는 Docker가 필요하다*"])
