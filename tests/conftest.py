@@ -13,6 +13,10 @@ from testcontainers.community.postgres import PostgresContainer
 
 from tests.support.postgres import alembic_config, start_database
 
+# 아래 fixture를 쓰는 테스트 실행을 따로 돌려서 그 결과(건너뛰기인지 오류인지)를 확인하는 데 쓴다
+# (tests/support/test_postgres.py의 TC-0.2.5).
+pytest_plugins = ["pytester"]
+
 
 @pytest.fixture(scope="session")
 def postgres_container() -> Iterator[PostgresContainer]:

@@ -1,13 +1,15 @@
-"""`scripts/compose-smoke.sh`와 `.gitattributes`의 테스트 (TC-0.5.5).
+"""`scripts/compose-smoke.sh`와 `.gitattributes`의 테스트 (TC-0.5.5, TC-0.5.1의 판정).
 
 스크립트를 실제로 돌려서 다섯 가지를 확인하는 것(TC-0.5.1)은 스크립트 자신이 한다.
 이 파일은 Docker 없이 돈다. 스크립트의 내용을 읽고(주석 줄은 뺀다), 가짜 `docker`를 앞세워
-스크립트를 실행해서 어떤 docker 명령을 부르는지를 본다.
+스크립트를 실행해서 어떤 docker 명령을 부르는지를 본다. 그리고 정상인 스택을 흉내 내는 가짜
+`docker`와 `curl`로, 다섯 확인이 하나씩 어긋날 때 스크립트가 0이 아닌 코드로 끝나는지 본다.
 """
 
 import os
 import re
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -70,13 +72,21 @@ def run_with_fake_docker(tmp_path: Path, *args: str, env: dict[str, str] | None 
     fake = bin_dir / "docker"
     fake.write_text(FAKE_DOCKER, encoding="utf-8")
     fake.chmod(0o755)
+    return run_script(tmp_path, bin_dir, *args, env=env)
+
+
+def run_script(tmp_path: Path, bin_dir: Path, *args: str, env: dict[str, str] | None = None) -> Run:
+    """bin_dir의 가짜 명령을 앞세워 스크립트를 돌린다. 임시 폴더(TMPDIR)도 이 테스트의 것을 쓴다."""
     log = tmp_path / "docker-calls.log"
+    temp_dir = tmp_path / "tmp"
+    temp_dir.mkdir(exist_ok=True)
 
     result = subprocess.run(
         [str(SCRIPT), *args],
         env={
             "PATH": os.pathsep.join([str(bin_dir), "/usr/bin", "/bin"]),
             "HOME": str(tmp_path),
+            "TMPDIR": str(temp_dir),
             "FAKE_DOCKER_LOG": str(log),
             **(env or {}),
         },
@@ -90,6 +100,105 @@ def run_with_fake_docker(tmp_path: Path, *args: str, env: dict[str, str] | None 
         for line in log.read_text(encoding="utf-8").splitlines():
             calls.append(line.split("\x1f")[:-1])
     return Run(result.returncode, result.stdout + result.stderr, calls)
+
+
+# 정상인 스택을 흉내 내는 가짜 docker. 스크립트가 부르는 하위 명령마다 정해진 출력을 낸다.
+# 환경변수(FAKE_*)로 그 출력을 바꿔서 확인 하나를 어긋나게 한다.
+# api 컨테이너에서 도는 파이썬 코드 가운데 uid를 읽는 것 밖의 코드는 가짜 이미지의 파일 시스템
+# (FAKE_IMAGE_ROOT)에서 실제로 돌린다. 작업 폴더는 그 아래의 app이고, 인자로 넘긴 "/"는
+# 가짜 이미지의 최상위로 바꾼다. 그래서 .env를 만드는 위치로 (5)를 어긋나게 할 수 있다.
+FAKE_STACK_PORT = "49153"
+FAKE_STACK_DOCKER = f"""#!{sys.executable}
+import os
+import subprocess
+import sys
+
+args = sys.argv[1:]
+with open(os.environ["FAKE_DOCKER_LOG"], "a", encoding="utf-8") as log:
+    log.write("".join(arg + "\\x1f" for arg in args) + "\\n")
+
+
+def say(text):
+    print(text)
+    sys.exit(0)
+
+
+if args[:1] == ["info"]:
+    sys.exit(0)
+if args[:1] == ["inspect"]:
+    say(os.environ.get("FAKE_MIGRATE_STATE", "exited 0"))
+if args[:1] != ["compose"]:
+    sys.exit(1)
+
+rest = args[1:]
+while rest[:1] in (["-p"], ["-f"], ["--env-file"]):
+    rest = rest[2:]
+if rest[:1] in (["down"], ["up"]):
+    sys.exit(0)
+if rest[:4] == ["ps", "--all", "--quiet", "migrate"]:
+    say("fake-migrate-container")
+if rest[:3] == ["port", "api", "8080"]:
+    say("0.0.0.0:{FAKE_STACK_PORT}")
+if rest[:4] == ["exec", "-T", "db", "psql"]:
+    say(os.environ.get("FAKE_VECTOR_VERSION", "0.8.7"))
+if rest[:3] == ["exec", "-T", "api"]:
+    inner = rest[3:]
+    if inner == ["pwd"]:
+        say("/app")
+    if inner[:2] == ["python", "-c"]:
+        code = inner[2]
+        if "Uid:" in code:
+            say(os.environ.get("FAKE_API_UIDS", "10001 10001 10001 10001"))
+        root = os.environ["FAKE_IMAGE_ROOT"]
+        extra = [root if arg == "/" else arg for arg in inner[3:]]
+        result = subprocess.run(
+            [sys.executable, "-c", code, *extra], cwd=os.path.join(root, "app")
+        )
+        sys.exit(result.returncode)
+sys.exit(1)
+"""
+
+# 가짜 curl. 받은 주소를 기록하고, 헬스체크의 본문을 낸다.
+FAKE_STACK_CURL = f"""#!{sys.executable}
+import os
+import sys
+
+with open(os.environ["FAKE_CURL_LOG"], "a", encoding="utf-8") as log:
+    log.write(sys.argv[-1] + "\\n")
+sys.stdout.write(os.environ.get("FAKE_HEALTH_BODY", '{{"status":"ok"}}'))
+"""
+
+
+@dataclass
+class StackRun(Run):
+    curl_urls: list[str]
+
+
+def make_fake_image(tmp_path: Path) -> Path:
+    """가짜 api 이미지의 파일 시스템. 작업 폴더(/app)와 파이썬이 깔린 폴더가 있다."""
+    root = tmp_path / "image"
+    (root / "app" / "app").mkdir(parents=True)
+    (root / "usr" / "local" / "lib" / "python3").mkdir(parents=True)
+    return root
+
+
+def run_against_fake_stack(
+    tmp_path: Path, image_root: Path, env: dict[str, str] | None = None
+) -> StackRun:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name, content in (("docker", FAKE_STACK_DOCKER), ("curl", FAKE_STACK_CURL)):
+        fake = bin_dir / name
+        fake.write_text(content, encoding="utf-8")
+        fake.chmod(0o755)
+    curl_log = tmp_path / "curl-calls.log"
+    run = run_script(
+        tmp_path,
+        bin_dir,
+        env={"FAKE_IMAGE_ROOT": str(image_root), "FAKE_CURL_LOG": str(curl_log), **(env or {})},
+    )
+    urls = curl_log.read_text(encoding="utf-8").splitlines() if curl_log.exists() else []
+    return StackRun(run.returncode, run.output, run.calls, urls)
 
 
 def compose_calls(calls: list[list[str]]) -> list[list[str]]:
@@ -217,6 +326,52 @@ def test_script_checks_vector_extension_through_db_service() -> None:
 def test_script_compares_health_body_exactly() -> None:
     assert any("/api/health" in line for line in code_lines())
     assert any('\'{"status":"ok"}\'' in line for line in code_lines())
+
+
+# --- TC-0.5.1: 다섯 확인이 실제로 판정하는가 ---------------------------------------
+
+
+def test_script_passes_when_every_check_holds(tmp_path: Path) -> None:
+    run = run_against_fake_stack(tmp_path, make_fake_image(tmp_path))
+
+    assert run.returncode == 0, run.output
+    assert "스모크 통과" in run.output
+    for number in range(1, 6):
+        assert f"확인: ({number})" in run.output, run.output
+    # (3)은 compose가 알려 준 호스트 포트로 요청한다.
+    assert run.curl_urls == [f"http://127.0.0.1:{FAKE_STACK_PORT}/api/health"]
+
+
+@pytest.mark.parametrize(
+    ("number", "env"),
+    [
+        pytest.param(1, {"FAKE_MIGRATE_STATE": "exited 1"}, id="1-migrate-failed"),
+        pytest.param(1, {"FAKE_MIGRATE_STATE": "running 0"}, id="1-migrate-not-exited"),
+        pytest.param(2, {"FAKE_VECTOR_VERSION": ""}, id="2-no-vector-extension"),
+        pytest.param(3, {"FAKE_HEALTH_BODY": '{"status":"ok","db":"ok"}'}, id="3-health-body"),
+        pytest.param(4, {"FAKE_API_UIDS": "0 0 0 0"}, id="4-runs-as-root"),
+        pytest.param(4, {"FAKE_API_UIDS": "10001 10001 0 10001"}, id="4-saved-uid-is-root"),
+    ],
+)
+def test_script_fails_when_one_check_does_not_hold(
+    tmp_path: Path, number: int, env: dict[str, str]
+) -> None:
+    run = run_against_fake_stack(tmp_path, make_fake_image(tmp_path), env)
+
+    assert run.returncode != 0, run.output
+    assert f"스모크 실패: ({number})" in run.output, run.output
+    assert "스모크 통과" not in run.output
+
+
+def test_script_fails_when_env_file_is_in_workdir(tmp_path: Path) -> None:
+    image_root = make_fake_image(tmp_path)
+    (image_root / "app" / ".env").write_text("DATABASE_URL=x\n", encoding="utf-8")
+
+    run = run_against_fake_stack(tmp_path, image_root)
+
+    assert run.returncode != 0, run.output
+    assert "스모크 실패: (5)" in run.output, run.output
+    assert "스모크 통과" not in run.output
 
 
 # --- TC-0.5.5: .gitattributes -----------------------------------------------

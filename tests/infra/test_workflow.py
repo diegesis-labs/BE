@@ -240,6 +240,23 @@ def test_check_job_installs_locked_dependencies_before_check_script() -> None:
     assert check and sync[0] < check[0], "check job이 의존성을 설치하기 전에 검사한다"
 
 
+@pytest.mark.parametrize("job_name", ["check", "compose-smoke"])
+def test_check_and_smoke_run_on_every_trigger(job_name: str) -> None:
+    # 검사와 스모크는 PR과 main의 push에서 모두 돈다(docs/DECISIONS.md의 D-36).
+    # job이나 step에 조건을 걸면 PR에서 건너뛰어도 검사가 초록으로 보인다.
+    assert "if" not in job(job_name), f"{job_name} job 전체에 조건이 걸려 있다"
+    for step in steps(job_name):
+        assert "if" not in step, f"{job_name} job의 step에 조건이 걸려 있다: {step}"
+
+
+def test_check_job_uses_only_checkout_and_setup_uv() -> None:
+    # 검사는 scripts/check.sh 한 곳에서 돈다(docs/DEVELOPMENT.md 2절). ruff-action처럼 검사 도구를
+    # 부르는 action을 더하면 run 줄을 보지 않고도 기준이 갈라진다.
+    allowed = {"actions/checkout", SETUP_UV}
+    used = {str(step["uses"]).split("@")[0] for step in steps("check") if "uses" in step}
+    assert used <= allowed, f"check job이 허용하지 않은 action을 쓴다: {sorted(used - allowed)}"
+
+
 def test_workflow_never_calls_check_tools_directly() -> None:
     # 검사 명령을 workflow에 따로 적으면 scripts/check.sh와 기준이 갈라진다.
     for job_name, step in all_steps():

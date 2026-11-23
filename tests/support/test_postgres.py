@@ -54,3 +54,25 @@ def test_start_database_without_docker_raises_instead_of_skipping(
     )
     assert isinstance(error, Exception)
     assert "통합 테스트에는 Docker가 필요하다" in str(error)
+
+
+def test_database_fixture_without_docker_errors_instead_of_skipping(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """통합 테스트가 쓰는 fixture(tests/conftest.py의 database_url)도 건너뛰지 않고 오류로 끝난다.
+
+    start_database()가 올바르더라도 fixture가 그 오류를 잡아 pytest.skip으로 바꾸면,
+    Docker가 없는 컴퓨터에서 통합 테스트가 모두 건너뛰기로 끝나 검사가 통과한다.
+    그래서 그 fixture를 요청하는 테스트를 따로 돌려서 결과를 본다.
+    """
+    monkeypatch.setenv("DOCKER_HOST", "unix:///nonexistent-diegesis/docker.sock")
+    monkeypatch.setattr(testcontainers_config, "tc_properties", {})
+    pytester.makeconftest("from tests.conftest import database_url, postgres_container\n")
+    pytester.makepyfile(
+        test_needs_database="def test_needs_database(database_url):\n    assert database_url\n"
+    )
+
+    result = pytester.runpytest("-p", "no:cacheprovider")
+
+    result.assert_outcomes(errors=1, skipped=0, passed=0)
+    result.stdout.fnmatch_lines(["*통합 테스트에는 Docker가 필요하다*"])

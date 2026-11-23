@@ -5,7 +5,8 @@
 개발자의 `.env`에 DATABASE_URL이 있더라도 그것이 보이지 않게 하기 위해서다.
 """
 
-import importlib
+import os
+import subprocess
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -15,6 +16,8 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from app.core.config import get_settings
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture(autouse=True)
@@ -36,14 +39,38 @@ def test_settings_are_unreadable_in_this_state() -> None:
         get_settings()
 
 
-def test_import_app_main_does_not_read_settings(monkeypatch: pytest.MonkeyPatch) -> None:
-    """DATABASE_URL이 없어도 app.main을 import할 수 있다."""
-    # 다른 테스트가 먼저 import했더라도 지금 상태에서 모듈을 다시 실행하게 한다.
-    monkeypatch.delitem(sys.modules, "app.main", raising=False)
+def run_python_without_settings(code: str, cwd: Path) -> subprocess.CompletedProcess[str]:
+    """DATABASE_URL이 없는 환경변수와 빈 작업 경로로, 새 파이썬 프로세스에서 코드를 돌린다.
 
-    module = importlib.import_module("app.main")
+    이 프로세스에서 `app`의 어느 모듈도 미리 import되어 있지 않으므로, `app.main`이 끌어오는
+    모든 하위 모듈이 처음부터 실행된다.
+    """
+    env = {key: value for key, value in os.environ.items() if key.upper() != "DATABASE_URL"}
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(REPO_ROOT), env.get("PYTHONPATH")]))
+    return subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
 
-    assert module.app is not None
+
+def test_import_app_main_does_not_read_settings(tmp_path: Path) -> None:
+    """DATABASE_URL이 없어도 app.main을 import할 수 있다. app.main이 끌어오는 모듈도 마찬가지다."""
+    # 전제: 그 프로세스에서는 설정을 읽으려 하면 실패한다.
+    precondition = run_python_without_settings(
+        "from app.core.config import get_settings; get_settings()", tmp_path
+    )
+    assert precondition.returncode != 0
+    assert "database_url" in precondition.stderr
+
+    result = run_python_without_settings(
+        "import app.main; assert app.main.app is not None", tmp_path
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.fixture
