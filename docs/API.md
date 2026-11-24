@@ -88,19 +88,21 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
 | [`GET /api/auth/google/callback`](#42-로그인과-로그아웃) | Google이 로그인 결과를 돌려주는 주소입니다. | Google만 호출 |
 | [`POST /api/auth/logout`](#42-로그인과-로그아웃) | 로그아웃합니다. | 로그인한 사용자 |
 | [`GET /api/me`](#43-내-정보) | 내 정보를 조회합니다. | 로그인한 사용자 |
-| [`GET /api/me/settings`](#44-선곡-설정) | 내 선곡 설정을 조회합니다. | 로그인한 사용자 |
-| [`PUT /api/me/settings`](#44-선곡-설정) | 내 선곡 설정을 바꿉니다. | 로그인한 사용자 |
+| [`GET /api/me/settings`](#44-선곡-설정) | 내 선곡 설정(임베딩 모델)과 고를 수 있는 모델의 목록을 조회합니다. | 로그인한 사용자 |
+| [`PUT /api/me/settings`](#44-선곡-설정) | 내 선곡 설정(임베딩 모델)을 바꿉니다. | 로그인한 사용자 |
 | [`GET /api/books`](#45-책-목록과-책-정보) | 책 목록을 조회합니다. | 로그인한 사용자 |
 | [`GET /api/books/{book_id}`](#45-책-목록과-책-정보) | 책 한 권의 정보와 챕터 목록을 조회합니다. | 로그인한 사용자 |
 | [`GET /api/books/{book_id}/chapters/{chapter_no}`](#46-챕터-본문) | 챕터의 본문을 조회합니다. | 로그인한 사용자 |
 | [`POST /api/books/{book_id}/position`](#47-위치-알림) | 화면에 보이는 문장의 범위를 알리고, 곡을 어떻게 할지 응답받습니다. | 로그인한 사용자 |
-| [`POST /api/recommendations/{id}/events`](#48-반응-기록) | 재생, 중단, 좋아요 같은 반응을 기록합니다. | 로그인한 사용자 |
+| [`POST /api/recommendations/{id}/events`](#48-반응-기록) | 재생, 좋아요, 싫어요 같은 반응을 기록합니다. | 로그인한 사용자 |
 | [`POST /api/admin/bundles`](#49-관리자-산출물-묶음-적재) | 산출물 묶음을 올립니다. | 관리자 |
 | [`GET /api/admin/allowed-emails`](#410-관리자-허용-목록) | 허용 목록을 조회합니다. | 관리자 |
 | [`POST /api/admin/allowed-emails`](#410-관리자-허용-목록) | 허용 목록에 한 사람을 추가합니다. | 관리자 |
 | [`DELETE /api/admin/allowed-emails/{email}`](#410-관리자-허용-목록) | 허용 목록에서 한 사람을 뺍니다. | 관리자 |
 | [`GET /api/admin/exports/recommendations`](#411-관리자-평가-자료-내보내기) | 선곡 기록을 CSV로 내려받습니다. | 관리자 |
 | [`GET /api/admin/exports/playback-events`](#411-관리자-평가-자료-내보내기) | 반응 기록을 CSV로 내려받습니다. | 관리자 |
+
+권한이 "관리자"인 경로는 프론트엔드의 관리자 화면이 호출합니다. 관리자 화면도 다른 화면과 같은 쿠키로 로그인 상태를 보내며, 백엔드는 `role`이 `admin`인 사람의 요청만 처리합니다.
 
 ## 4. 엔드포인트별 형식과 예시
 
@@ -222,12 +224,16 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
   - **Response Body** (`200 OK`)
 
     ```json
-    { "strategy": "embedding", "embedding_model": "muq-mulan" }
+    {
+      "embedding_model": "muq-mulan",
+      "available_embedding_models": ["muq-mulan", "laion-clap-music"]
+    }
     ```
 
   - **설명**
-    - `strategy`는 선곡 방식이며 `embedding`(장면에 맞춘 선곡), `random`(무작위 선곡), `silent`(음악 없음) 가운데 하나입니다.
-    - `embedding_model`은 임베딩 모델의 이름이며, 현재는 `muq-mulan`과 `laion-clap-music` 가운데 하나입니다. 이 값은 선곡 방식이 `embedding`일 때에만 의미가 있습니다.
+    - `embedding_model`은 선곡에 쓰는 임베딩 모델의 이름입니다. 사용자가 설정을 바꾸기 전에는 기본값이 들어 있습니다.
+    - `available_embedding_models`는 고를 수 있는 임베딩 모델의 이름 목록이며, 백엔드에 등록된 모델이 모두 들어 있습니다. 모델은 산출물 묶음을 적재할 때 등록되므로, 이 목록은 묶음을 올릴 때마다 늘어날 수 있습니다.
+    - 선곡 방식은 장면에 맞춘 선곡 한 가지뿐이므로, 사용자가 바꿀 수 있는 것은 임베딩 모델뿐입니다([ADR-021](ADR.md#adr-021-선곡-방식의-추상화를-없애고-설정에는-임베딩-모델만-둔다)).
 
 - **`PUT /api/me/settings`**: 내 선곡 설정을 바꿉니다.
   - **Request Header**
@@ -240,14 +246,19 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
   - **Request Body**
 
     ```json
-    { "strategy": "random", "embedding_model": "muq-mulan" }
+    { "embedding_model": "laion-clap-music" }
     ```
 
   - **Response Body** (`200 OK`): 바뀐 뒤의 설정을 조회할 때와 같은 형식으로 응답합니다.
 
     ```json
-    { "strategy": "random", "embedding_model": "muq-mulan" }
+    {
+      "embedding_model": "laion-clap-music",
+      "available_embedding_models": ["muq-mulan", "laion-clap-music"]
+    }
     ```
+
+  - **설명**: `embedding_model`이 등록되지 않은 모델의 이름이면 `400 VALIDATION_ERROR`를 응답합니다.
 
 ### 4.5 책 목록과 책 정보
 
@@ -358,7 +369,6 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
       "chapter_no": 1,
       "first_sentence_idx": 412,
       "last_sentence_idx": 431,
-      "trigger": "page_turn",
       "current_recommendation_id": "8a2f4b1c-3d5e-4f6a-9b7c-0d1e2f3a4b5c"
     }
     ```
@@ -368,35 +378,54 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
     | `chapter_no` | 지금 보고 있는 챕터의 번호입니다. |
     | `first_sentence_idx` | 화면에 보이는 첫 문장의 문장 인덱스입니다. |
     | `last_sentence_idx` | 화면에 보이는 마지막 문장의 문장 인덱스입니다. |
-    | `trigger` | 이 요청을 보내게 된 계기입니다. 페이지를 넘겼다면 `page_turn`, 재생 중이던 곡이 끝났다면 `track_ended`를 보냅니다. |
-    | `current_recommendation_id` | 지금 재생 중인 곡을 받을 때 함께 받았던 `recommendation_id`입니다. 재생 중인 곡이 없다면 `null`을 보냅니다. |
+    | `current_recommendation_id` | 지금 재생 중인 후보의 `recommendation_id`입니다. 재생 중인 곡이 없다면 `null`을 보냅니다. 구간이 끝나서 멈췄거나, 후보를 모두 싫어요로 넘겨서 틀 곡이 없는 경우도 여기에 해당합니다. |
 
-  - **Response Body** (`200 OK`): 응답의 `action`은 아래 세 가지 가운데 하나이며, 프론트엔드는 이 값에 따라 동작합니다.
+  - **Response Body** (`200 OK`): 응답의 `action`은 아래 두 가지 가운데 하나이며, 프론트엔드는 이 값에 따라 동작합니다.
 
     | `action` | 뜻 | 프론트엔드가 할 일 |
     | --- | --- | --- |
-    | `play` | 새 곡을 틀어야 합니다. | 응답에 담긴 곡으로 바꿔서 재생합니다. |
+    | `play` | 이 장면의 후보 목록입니다. | 지금 재생 중인 곡을 멈추고, 아래의 재생 규칙에 따라 후보 가운데 하나를 재생합니다. |
     | `keep` | 지금 재생 중인 곡이 이 장면의 곡입니다. | 지금 재생 중인 곡을 그대로 둡니다. |
-    | `silence` | 지금은 곡을 틀지 않습니다. | 재생 중인 곡이 있다면 멈춥니다. |
 
-    새 곡을 틀어야 할 때(`play`)의 응답은 다음과 같습니다.
+    새 후보 목록을 받을 때(`play`)의 응답은 다음과 같습니다.
 
     ```json
     {
       "action": "play",
-      "recommendation_id": "c41e7a90-6b2d-4f0a-b1c3-9e8d7f6a5b40",
-      "track": {
-        "id": "trk_0042",
-        "title": "Quiet Streets",
-        "artist": "Example Artist",
-        "audio_url": "https://storage.example.com/audio/trk_0042.mp3?expires=1796126700&signature=3f9a1c",
-        "audio_url_expires_at": "2026-12-01T13:00:00Z",
-        "duration_ms": 184000,
-        "segment": { "start_ms": 30000, "end_ms": 60000 },
-        "license": "CC0 1.0",
-        "attribution": null,
-        "liked": false
-      }
+      "candidates": [
+        {
+          "recommendation_id": "c41e7a90-6b2d-4f0a-b1c3-9e8d7f6a5b40",
+          "selection_reason": "embedding",
+          "track": {
+            "id": "trk_0042",
+            "title": "Quiet Streets",
+            "artist": "Example Artist",
+            "audio_url": "https://storage.example.com/audio/trk_0042.mp3?expires=1796126700&signature=3f9a1c",
+            "audio_url_expires_at": "2026-12-01T13:00:00Z",
+            "duration_ms": 184000,
+            "segment": { "start_ms": 30000, "end_ms": 60000 },
+            "license": "CC0 1.0",
+            "attribution": null,
+            "liked": false
+          }
+        },
+        {
+          "recommendation_id": "7b2d9e41-0c5a-4d8f-a6b3-2e1f0d9c8b7a",
+          "selection_reason": "embedding",
+          "track": {
+            "id": "trk_0107",
+            "title": "Grey Afternoon",
+            "artist": "Another Artist",
+            "audio_url": "https://storage.example.com/audio/trk_0107.mp3?expires=1796126700&signature=8c2e4d",
+            "audio_url_expires_at": "2026-12-01T13:00:00Z",
+            "duration_ms": 212000,
+            "segment": { "start_ms": 90000, "end_ms": 120000 },
+            "license": "CC BY 4.0",
+            "attribution": "Grey Afternoon by Another Artist, CC BY 4.0",
+            "liked": true
+          }
+        }
+      ]
     }
     ```
 
@@ -406,26 +435,28 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
     { "action": "keep" }
     ```
 
-    곡을 틀지 않을 때(`silence`)의 응답은 다음과 같습니다.
-
-    ```json
-    { "action": "silence", "cooldown_until": "2026-12-01T12:05:00Z" }
-    ```
+  - **프론트엔드의 재생 규칙**: 후보 가운데 무엇을 틀지는 프론트엔드가 아래 규칙으로 정합니다([ADR-020](ADR.md#adr-020-위치-알림은-후보-k개를-돌려주고-프론트엔드가-재생할-곡을-고른다)).
+    1. `selection_reason`이 `designated`인 후보가 있으면 그 후보를 먼저 재생합니다. 그런 후보가 없으면 후보 가운데 하나를 무작위로 골라 재생합니다.
+    2. 재생은 구간이 시작하는 위치(`segment.start_ms`)에서 시작하고, 구간이 끝나는 위치(`segment.end_ms`)에서 멈춥니다. 구간이 끝났다고 해서 다음 후보를 이어서 틀지 않습니다.
+    3. 사용자가 싫어요를 누르면 그 후보의 반응 기록으로 `disliked`를 보내고(4.8절), 아직 틀지 않은 후보 가운데 하나를 무작위로 골라 재생합니다.
+    4. 후보를 모두 싫어요로 넘겼다면, 다음 위치 알림을 보낼 때까지 곡을 틀지 않습니다.
+    5. `candidates`가 빈 목록이면 4번과 같이 다룹니다.
 
   - **설명**
     - 요청의 `first_sentence_idx`와 `last_sentence_idx`는 `chapter_no` 챕터의 범위, 곧 4.5절 응답에 있는 그 챕터의 `first_sentence_idx`부터 `last_sentence_idx`까지의 안에 있어야 합니다. 그리고 요청의 `first_sentence_idx`는 `last_sentence_idx`보다 클 수 없습니다. 이를 어기면 `400 VALIDATION_ERROR`를 응답합니다.
-    - `segment`는 장면과 가장 잘 맞아떨어진 구간의 위치이며, 프론트엔드는 곡의 맨 앞이 아니라 이 구간이 시작하는 위치(`start_ms`)부터 재생합니다.
-    - 백엔드는 `current_recommendation_id`로 지금 재생 중인 곡이 어느 장면의 곡인지를 찾습니다. 그 장면이 이번에 보이는 범위에서 고른 장면과 같고 `trigger`가 `page_turn`이라면 `keep`을 응답합니다. 반면에 `trigger`가 `track_ended`라면 장면이 같더라도 새 곡을 골라서 `play`를 응답합니다.
-    - 응답의 `recommendation_id`는 다음 위치 알림의 `current_recommendation_id`와 4.8절의 반응 기록에 씁니다.
-    - `silence` 응답의 `cooldown_until`은 자동 재생 쉬는 시간이 끝나는 시각입니다. 곡을 틀지 않는 이유가 쉬는 시간이 아니라 사용자의 선곡 방식이 무음이기 때문이라면 `cooldown_until`은 `null`입니다.
+    - 후보는 최대 k개이며, k는 설정값입니다([CONFIGURATION.md](CONFIGURATION.md#34-선곡)). 장면이 직접 언급 장면이고 지정 곡이 있으면 그 곡을 `selection_reason`이 `designated`인 후보로 맨 앞에 두고, 나머지는 장면과 가까운 순서로 둡니다. 그 사용자가 싫어요를 누른 적이 있는 구간은 후보에 들어 있지 않습니다. 남은 구간이 없으면 `candidates`는 빈 목록입니다.
+    - `segment`는 그 후보의 구간 위치입니다. 프론트엔드는 곡의 맨 앞이 아니라 이 구간이 시작하는 위치(`start_ms`)부터 재생합니다.
+    - 백엔드는 `current_recommendation_id`로 지금 재생 중인 곡이 어느 장면의 후보인지를 찾습니다. 그 장면이 이번에 보이는 범위에서 고른 장면과 같다면 `keep`을 응답합니다. 반면에 `current_recommendation_id`가 `null`이면 장면이 같더라도 새 후보 목록을 `play`로 응답합니다. 그래서 구간이 끝나서 멈췄거나 후보를 모두 넘겼다면, 다음 페이지에서 다시 곡이 나옵니다.
+    - 후보의 `recommendation_id`는 다음 위치 알림의 `current_recommendation_id`와 4.8절의 반응 기록에 씁니다.
+    - `liked`는 사용자가 그 곡에 좋아요를 누른 상태인지를 나타냅니다.
     - `audio_url`은 서명된 주소입니다. 서명된 주소는 정해진 시간 동안만 유효한 임시 주소이며, 음원 파일은 이 주소로만 받을 수 있습니다. 그러므로 프론트엔드는 다음 세 가지를 지켜야 합니다.
       - `audio_url`을 저장해 두었다가 나중에 다시 쓰지 않습니다. 이 주소는 `audio_url_expires_at`에 적힌 시각이 지나면 쓸 수 없게 됩니다.
       - 주소를 고치거나 조립하지 않고 받은 그대로 씁니다. 주소의 일부를 바꾸면 서명이 맞지 않아서 요청이 거부됩니다. 위 예시의 `expires`와 `signature`는 형태를 보여 주기 위한 것이며, 실제 모양은 저장소 서비스에 따라 다릅니다.
-      - 사용자가 곡을 오래 멈춰 두었다가 다시 재생하는 경우처럼 주소가 만료된 뒤에 음원을 다시 받아야 한다면, `current_recommendation_id`를 `null`로 두고 위치 알림을 다시 보내서 새 곡을 받습니다.
+      - 사용자가 곡을 오래 일시정지해 두었다가 다시 재생하는 경우처럼 주소가 만료된 뒤에 음원을 다시 받아야 한다면, `current_recommendation_id`를 `null`로 두고 위치 알림을 다시 보내서 새 후보 목록을 받습니다.
 
 ### 4.8 반응 기록
 
-- **`POST /api/recommendations/{id}/events`**: 재생, 중단, 좋아요 같은 반응을 기록합니다.
+- **`POST /api/recommendations/{id}/events`**: 재생, 좋아요, 싫어요 같은 반응을 기록합니다. 경로의 `id`는 반응이 가리키는 후보의 `recommendation_id`입니다.
   - **Request Header**
 
     ```http
@@ -436,7 +467,7 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
   - **Request Body**
 
     ```json
-    { "type": "stopped", "position_ms": 42000 }
+    { "type": "disliked", "position_ms": 42000 }
     ```
 
     | 요청 필드 | 설명 |
@@ -446,19 +477,14 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
 
     | `type` | 언제 보내는가 |
     | --- | --- |
-    | `started` | 곡이 실제로 재생되기 시작했을 때 보냅니다. |
-    | `stopped` | 사용자가 중단 버튼을 눌렀을 때 보냅니다. 이 곡은 그 사용자에게 다시 나오지 않으며, 그 책에서 자동 재생 쉬는 시간이 시작됩니다. |
-    | `completed` | 곡이 끝까지 재생됐을 때 보냅니다. |
+    | `started` | 후보의 구간이 실제로 재생되기 시작했을 때 보냅니다. 여러 후보 가운데 실제로 재생된 것은 이 이벤트로 알 수 있습니다. |
+    | `completed` | 구간이 끝나는 위치까지 재생됐을 때 보냅니다. |
     | `liked` | 사용자가 좋아요를 눌렀을 때 보냅니다. |
     | `unliked` | 사용자가 좋아요를 취소했을 때 보냅니다. |
+    | `disliked` | 사용자가 싫어요를 눌렀을 때 보냅니다. 이 후보의 구간은 그 사용자에게 다시 나오지 않습니다. 프론트엔드는 음악을 멈추지 않고 다른 후보를 틉니다(4.7절의 재생 규칙). |
 
-  - **Response Body**: `type`이 `stopped`일 때에는 `200 OK`와 함께 자동 재생 쉬는 시간이 끝나는 시각을 응답합니다.
-
-    ```json
-    { "cooldown_until": "2026-12-01T12:05:00Z" }
-    ```
-
-    그 밖의 `type`일 때에는 `204 No Content`이며 본문이 없습니다.
+  - **Response Body**: `204 No Content`이며 본문이 없습니다.
+  - **설명**: 일시정지와 다시 재생은 반응으로 보지 않으므로 보내지 않습니다. 좋아요는 곡 단위로, 싫어요는 구간 단위로 적용합니다. 그래서 좋아요를 누른 곡은 다른 구간이 후보로 나와도 `liked`가 `true`이고, 싫어요를 누른 구간과 같은 곡의 다른 구간은 다시 후보로 나올 수 있습니다.
 
 ### 4.9 관리자: 산출물 묶음 적재
 
@@ -579,11 +605,11 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
   - **Response Body**
 
     ```csv
-    recommendation_id,created_at,user_email,book_id,book_version,scene_id,strategy,selection_reason,embedding_model,track_id,segment_id,segment_start_ms,similarity,scene_valence,scene_arousal,scene_tags,scene_gems,segment_valence,segment_arousal,segment_tags,segment_gems
-    c41e7a90-...,2026-12-01T12:01:10Z,reader@example.com,sample-novel,1,scene_0007,embedding,embedding,muq-mulan,trk_0042,trk_0042_s00,0,0.412,-0.6,-0.35,sad|melancholic,sadness,-0.55,-0.4,sad|melancholic,sadness|nostalgia
+    recommendation_id,candidate_list_id,rank_idx,created_at,user_email,book_id,book_version,scene_id,selection_reason,embedding_model,track_id,segment_id,segment_start_ms,similarity,scene_valence,scene_arousal,scene_tags,scene_gems,segment_valence,segment_arousal,segment_tags,segment_gems
+    c41e7a90-...,5d3f1a2b-...,0,2026-12-01T12:01:10Z,reader@example.com,sample-novel,1,scene_0007,embedding,muq-mulan,trk_0042,trk_0042_s00,0,0.412,-0.6,-0.35,sad|melancholic,sadness,-0.55,-0.4,sad|melancholic,sadness|nostalgia
     ```
 
-  - **설명**: 뒤의 여덟 열은 그 장면과 뽑힌 구간의 평가 라벨입니다([AI_CONTRACT.md 2절](AI_CONTRACT.md#라벨에-대한-규칙)). `tags`와 `gems`처럼 값이 여러 개인 열은 한 칸 안에서 `|`로 잇습니다. 이 열들로 장면과 구간의 V-A 거리, 태그와 GEMS 차원의 일치 여부를 계산할 수 있습니다.
+  - **설명**: 한 줄이 후보 하나입니다. 위치 알림 응답 하나에 담긴 후보들은 같은 `candidate_list_id`를 가지며, `rank_idx`는 그 목록 안에서의 순서입니다(0부터 셉니다). 후보 가운데 실제로 재생된 것은 반응 기록 CSV의 `started`를 `recommendation_id`로 이어서 알 수 있습니다. 뒤의 여덟 열은 그 장면과 후보 구간의 평가 라벨입니다([AI_CONTRACT.md 2절](AI_CONTRACT.md#라벨에-대한-규칙)). `tags`와 `gems`처럼 값이 여러 개인 열은 한 칸 안에서 `|`로 잇습니다. 이 열들로 장면과 구간의 V-A 거리, 태그와 GEMS 차원의 일치 여부를 계산할 수 있습니다.
 
 - **`GET /api/admin/exports/playback-events`**: 반응 기록을 CSV로 내려받습니다.
   - **Request Header**
@@ -605,13 +631,9 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
 
     ```csv
     event_id,created_at,recommendation_id,user_email,type,position_ms
-    9a8b7c6d-...,2026-12-01T12:01:52Z,c41e7a90-...,reader@example.com,stopped,42000
+    9a8b7c6d-...,2026-12-01T12:01:52Z,c41e7a90-...,reader@example.com,disliked,42000
     ```
 
 ## 5. 프론트엔드와 더 합의할 것
 
-- 구간이 끝나는 위치(`end_ms`)에 이르렀을 때 곡을 이어서 틀지, 거기서 멈추고 다음 곡을 요청할지를 정해야 합니다. 재생을 구간의 시작 위치에서 시작한다는 것까지만 정해져 있습니다.
-- 곡이 바뀔 때 앞 곡을 서서히 줄이고 다음 곡을 서서히 키우는 처리(크로스페이드)를 할지 정해야 합니다.
 - 독자가 페이지를 빠르게 연달아 넘길 때 위치 알림 요청을 얼마나 묶어서 보낼지 정해야 합니다.
-- 선곡 방식과 임베딩 모델을 바꾸는 설정 화면을 어디에 둘지 정해야 합니다.
-- 허용 목록에 없는 계정으로 로그인했을 때 보여 줄 화면의 경로를 확정해야 합니다. 이 문서에서는 `/login?error=NOT_ALLOWED`로 가정했습니다.
