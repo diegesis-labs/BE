@@ -28,6 +28,7 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
 - 요청과 응답의 본문은 JSON이며, 필드 이름은 `snake_case`로 씁니다.
 - 시각은 UTC 기준의 ISO 8601 문자열로 표현합니다. 예를 들면 `"2026-12-01T12:05:00Z"`와 같습니다.
 - 길이와 위치는 밀리초 단위의 정수로 표현하며, 필드 이름 끝에 `_ms`를 붙입니다.
+- 번호에는 필드 이름 끝에 `_no`를, 인덱스에는 `_idx`를 붙입니다. 예를 들어 `chapter_no`는 1부터 세고, `first_sentence_idx`는 0부터 셉니다. 다만 목록의 항목이 자기 자신의 인덱스를 담을 때에는 `idx`라고만 씁니다. 번호와 인덱스의 뜻은 [GLOSSARY.md](GLOSSARY.md#표기와-관련된-용어)에, 이렇게 정한 이유는 [ADR-017](ADR.md#adr-017-번호와-인덱스의-구분)에 있습니다.
 
 ### 2.2 로그인 상태
 
@@ -49,11 +50,11 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
 {
   "code": "VALIDATION_ERROR",
   "message": "요청 형식이 올바르지 않습니다.",
-  "detail": [{ "field": "first_sentence", "reason": "0 이상의 정수여야 합니다." }]
+  "detail": [{ "field": "first_sentence_idx", "reason": "0 이상의 정수여야 합니다." }]
 }
 ```
 
-검증 오류(`VALIDATION_ERROR`)의 `detail`은 `{ "field", "reason" }`의 목록이며, 두 값은 언제나 문자열입니다. `field`는 잘못된 필드의 이름이고, 안쪽의 필드는 점으로 잇습니다. 예를 들어 `item.price`와 같으며, 목록 안의 항목은 `extras.0.price`처럼 순번을 넣습니다. 본문이 JSON으로 읽히지 않거나 본문 전체의 모양이 틀려서 특정 필드를 가리킬 수 없으면 `field`는 빈 문자열 `""`입니다.
+검증 오류(`VALIDATION_ERROR`)의 `detail`은 `{ "field", "reason" }`의 목록이며, 두 값은 언제나 문자열입니다. `field`는 잘못된 필드의 이름이고, 안쪽의 필드는 점으로 잇습니다. 예를 들어 `item.price`와 같으며, 목록 안의 항목은 `extras.0.price`처럼 그 항목의 인덱스를 넣습니다. 본문이 JSON으로 읽히지 않거나 본문 전체의 모양이 틀려서 특정 필드를 가리킬 수 없으면 `field`는 빈 문자열 `""`입니다.
 
 ```json
 {
@@ -73,6 +74,7 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
 | 403 | `ADMIN_ONLY` | 관리자만 쓸 수 있는 경로를 일반 사용자가 호출했을 때 |
 | 404 | `NOT_FOUND` | 요청한 책, 챕터, 선곡 기록 등이 없을 때 |
 | 405 | `METHOD_NOT_ALLOWED` | 경로는 있지만 그 메서드로는 호출할 수 없을 때 |
+| 422 | `BUNDLE_INVALID` | 올린 산출물 묶음이 규격에 어긋날 때 (4.9절) |
 | 500 | `INTERNAL_ERROR` | 서버 내부에서 예상하지 못한 문제가 생겼을 때 |
 
 위 표에 없는 상태 코드로 응답할 때에는 그 HTTP 상태의 영문 이름을 대문자와 밑줄로 쓴 값을 `code`로 씁니다. 예를 들어 409이면 `CONFLICT`입니다.
@@ -81,23 +83,24 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
 
 | 메서드와 경로 | 용도 | 권한 |
 | --- | --- | --- |
-| `GET /api/health` | 서버가 살아 있는지 확인합니다. | 누구나 |
-| `GET /api/auth/google/login` | Google 로그인 화면으로 이동시킵니다. | 누구나 |
-| `GET /api/auth/google/callback` | Google이 로그인 결과를 돌려주는 주소입니다. | Google만 호출 |
-| `POST /api/auth/logout` | 로그아웃합니다. | 로그인한 사용자 |
-| `GET /api/me` | 내 정보를 조회합니다. | 로그인한 사용자 |
-| `GET /api/me/settings` | 내 선곡 설정을 조회합니다. | 로그인한 사용자 |
-| `PUT /api/me/settings` | 내 선곡 설정을 바꿉니다. | 로그인한 사용자 |
-| `GET /api/books` | 책 목록을 조회합니다. | 로그인한 사용자 |
-| `GET /api/books/{book_id}` | 책 한 권의 정보와 챕터 목록을 조회합니다. | 로그인한 사용자 |
-| `GET /api/books/{book_id}/chapters/{chapter_no}` | 챕터의 본문을 조회합니다. | 로그인한 사용자 |
-| `POST /api/books/{book_id}/position` | 화면에 보이는 문장의 범위를 알리고, 곡을 어떻게 할지 응답받습니다. | 로그인한 사용자 |
-| `POST /api/recommendations/{id}/events` | 재생, 중단, 좋아요 같은 반응을 기록합니다. | 로그인한 사용자 |
-| `POST /api/admin/bundles` | 산출물 묶음을 올립니다. | 관리자 |
-| `GET /api/admin/bundles/{id}` | 적재 작업의 상태를 조회합니다. | 관리자 |
-| `GET`, `POST`, `DELETE /api/admin/allowed-emails` | 허용 목록을 관리합니다. | 관리자 |
-| `GET /api/admin/exports/recommendations` | 선곡 기록을 CSV로 내려받습니다. | 관리자 |
-| `GET /api/admin/exports/playback-events` | 반응 기록을 CSV로 내려받습니다. | 관리자 |
+| [`GET /api/health`](#41-헬스체크) | 서버가 살아 있는지 확인합니다. | 누구나 |
+| [`GET /api/auth/google/login`](#42-로그인과-로그아웃) | Google 로그인 화면으로 이동시킵니다. | 누구나 |
+| [`GET /api/auth/google/callback`](#42-로그인과-로그아웃) | Google이 로그인 결과를 돌려주는 주소입니다. | Google만 호출 |
+| [`POST /api/auth/logout`](#42-로그인과-로그아웃) | 로그아웃합니다. | 로그인한 사용자 |
+| [`GET /api/me`](#43-내-정보) | 내 정보를 조회합니다. | 로그인한 사용자 |
+| [`GET /api/me/settings`](#44-선곡-설정) | 내 선곡 설정을 조회합니다. | 로그인한 사용자 |
+| [`PUT /api/me/settings`](#44-선곡-설정) | 내 선곡 설정을 바꿉니다. | 로그인한 사용자 |
+| [`GET /api/books`](#45-책-목록과-책-정보) | 책 목록을 조회합니다. | 로그인한 사용자 |
+| [`GET /api/books/{book_id}`](#45-책-목록과-책-정보) | 책 한 권의 정보와 챕터 목록을 조회합니다. | 로그인한 사용자 |
+| [`GET /api/books/{book_id}/chapters/{chapter_no}`](#46-챕터-본문) | 챕터의 본문을 조회합니다. | 로그인한 사용자 |
+| [`POST /api/books/{book_id}/position`](#47-위치-알림) | 화면에 보이는 문장의 범위를 알리고, 곡을 어떻게 할지 응답받습니다. | 로그인한 사용자 |
+| [`POST /api/recommendations/{id}/events`](#48-반응-기록) | 재생, 중단, 좋아요 같은 반응을 기록합니다. | 로그인한 사용자 |
+| [`POST /api/admin/bundles`](#49-관리자-산출물-묶음-적재) | 산출물 묶음을 올립니다. | 관리자 |
+| [`GET /api/admin/allowed-emails`](#410-관리자-허용-목록) | 허용 목록을 조회합니다. | 관리자 |
+| [`POST /api/admin/allowed-emails`](#410-관리자-허용-목록) | 허용 목록에 한 사람을 추가합니다. | 관리자 |
+| [`DELETE /api/admin/allowed-emails/{email}`](#410-관리자-허용-목록) | 허용 목록에서 한 사람을 뺍니다. | 관리자 |
+| [`GET /api/admin/exports/recommendations`](#411-관리자-평가-자료-내보내기) | 선곡 기록을 CSV로 내려받습니다. | 관리자 |
+| [`GET /api/admin/exports/playback-events`](#411-관리자-평가-자료-내보내기) | 반응 기록을 CSV로 내려받습니다. | 관리자 |
 
 ## 4. 엔드포인트별 형식과 예시
 
@@ -289,10 +292,10 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
       "author": "견본 작가",
       "language": "ko",
       "chapters": [
-        { "chapter_no": 1, "title": "제1장", "first_sentence": 0, "last_sentence": 511 },
-        { "chapter_no": 2, "title": "제2장", "first_sentence": 512, "last_sentence": 1040 }
+        { "chapter_no": 1, "title": "제1장", "first_sentence_idx": 0, "last_sentence_idx": 511 },
+        { "chapter_no": 2, "title": "제2장", "first_sentence_idx": 512, "last_sentence_idx": 1040 }
       ],
-      "last_position": { "chapter_no": 1, "first_sentence": 412 }
+      "last_position": { "chapter_no": 1, "first_sentence_idx": 412 }
     }
     ```
 
@@ -317,14 +320,14 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
       "title": "제1장",
       "paragraphs": [
         {
-          "paragraph_no": 0,
+          "paragraph_idx": 0,
           "sentences": [
             { "idx": 0, "text": "기차가 역을 빠져나가자 창밖으로 낮은 지붕들이 천천히 흘러갔다." },
             { "idx": 1, "text": "나는 이마를 유리창에 기댄 채 한동안 아무 생각도 하지 않았다." }
           ]
         },
         {
-          "paragraph_no": 1,
+          "paragraph_idx": 1,
           "sentences": [
             { "idx": 2, "text": "옆자리의 라디오에서 오래된 노래가 작게 흘러나오기 시작했다." }
           ]
@@ -334,7 +337,7 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
     ```
 
   - **설명**
-    - 본문은 문단의 목록이고, 각 문단은 문장의 목록입니다. 그리고 문장마다 붙은 `idx`가 문장 번호입니다.
+    - 본문은 문단의 목록이고, 각 문단은 문장의 목록입니다. 문단의 `paragraph_idx`는 챕터 안에서 0부터 세고, 문장마다 붙은 `idx`는 문장 인덱스입니다.
     - 프론트엔드는 이 구조를 바탕으로 직접 페이지를 나누며, 한 페이지에 보이는 첫 문장과 마지막 문장의 `idx`를 기억해 두었다가 4.7절의 위치 알림 요청에 씁니다.
     - 장면의 경계는 이 응답에 들어 있지 않습니다. 어느 장면의 곡을 틀지는 백엔드가 판단하기 때문입니다.
 
@@ -353,8 +356,8 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
     ```json
     {
       "chapter_no": 1,
-      "first_sentence": 412,
-      "last_sentence": 431,
+      "first_sentence_idx": 412,
+      "last_sentence_idx": 431,
       "trigger": "page_turn",
       "current_recommendation_id": "8a2f4b1c-3d5e-4f6a-9b7c-0d1e2f3a4b5c"
     }
@@ -363,8 +366,8 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
     | 요청 필드 | 설명 |
     | --- | --- |
     | `chapter_no` | 지금 보고 있는 챕터의 번호입니다. |
-    | `first_sentence` | 화면에 보이는 첫 문장의 문장 번호입니다. |
-    | `last_sentence` | 화면에 보이는 마지막 문장의 문장 번호입니다. |
+    | `first_sentence_idx` | 화면에 보이는 첫 문장의 문장 인덱스입니다. |
+    | `last_sentence_idx` | 화면에 보이는 마지막 문장의 문장 인덱스입니다. |
     | `trigger` | 이 요청을 보내게 된 계기입니다. 페이지를 넘겼다면 `page_turn`, 재생 중이던 곡이 끝났다면 `track_ended`를 보냅니다. |
     | `current_recommendation_id` | 지금 재생 중인 곡을 받을 때 함께 받았던 `recommendation_id`입니다. 재생 중인 곡이 없다면 `null`을 보냅니다. |
 
@@ -410,6 +413,7 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
     ```
 
   - **설명**
+    - 요청의 `first_sentence_idx`와 `last_sentence_idx`는 `chapter_no` 챕터의 범위, 곧 4.5절 응답에 있는 그 챕터의 `first_sentence_idx`부터 `last_sentence_idx`까지의 안에 있어야 합니다. 그리고 요청의 `first_sentence_idx`는 `last_sentence_idx`보다 클 수 없습니다. 이를 어기면 `400 VALIDATION_ERROR`를 응답합니다.
     - `segment`는 장면과 가장 잘 맞아떨어진 구간의 위치이며, 프론트엔드는 곡의 맨 앞이 아니라 이 구간이 시작하는 위치(`start_ms`)부터 재생합니다.
     - 백엔드는 `current_recommendation_id`로 지금 재생 중인 곡이 어느 장면의 곡인지를 찾습니다. 그 장면이 이번에 보이는 범위에서 고른 장면과 같고 `trigger`가 `page_turn`이라면 `keep`을 응답합니다. 반면에 `trigger`가 `track_ended`라면 장면이 같더라도 새 곡을 골라서 `play`를 응답합니다.
     - 응답의 `recommendation_id`는 다음 위치 알림의 `current_recommendation_id`와 4.8절의 반응 기록에 씁니다.
@@ -477,48 +481,27 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
     ------bundle-boundary--
     ```
 
-  - **Response Body** (`202 Accepted`)
+  - **Response Body** (`200 OK`): 적재가 끝난 뒤에 응답합니다.
 
     ```json
-    { "id": "5f0e2b7c-1a3d-4c9e-8b6f-0d2a4c6e8f10", "bundle_type": "book", "status": "pending" }
+    { "bundle_type": "book" }
     ```
 
-  - **설명**: 묶음의 규격은 [AI_CONTRACT.md](AI_CONTRACT.md)에 정의되어 있습니다. 적재에는 시간이 걸릴 수 있으므로, 이 요청은 적재 작업의 ID만 먼저 응답합니다.
-
-- **`GET /api/admin/bundles/{id}`**: 적재 작업의 상태를 조회합니다.
-  - **Request Header**
-
-    ```http
-    Cookie: diegesis_session=4mXq8ZpT1vK0
-    ```
-
-  - **Request Body**: 없습니다.
-  - **Response Body** (`200 OK`): 아래는 적재가 실패했을 때의 예시입니다.
+  - **Response Body** (`422 Unprocessable Entity`): 묶음이 규격에 어긋나면 아무것도 적재하지 않고 오류 목록을 응답합니다.
 
     ```json
     {
-      "id": "5f0e2b7c-1a3d-4c9e-8b6f-0d2a4c6e8f10",
-      "bundle_type": "book",
-      "status": "failed",
-      "errors": [
-        { "file": "scenes.jsonl", "line": 7, "reason": "end_sentence(455)가 마지막 문장 번호(440)보다 큽니다." },
+      "code": "BUNDLE_INVALID",
+      "message": "묶음이 규격에 맞지 않습니다.",
+      "detail": [
+        { "file": "scenes.jsonl", "line_no": 7, "reason": "end_sentence_idx(455)가 마지막 문장 인덱스(440)보다 큽니다." },
+        { "file": "scenes.jsonl", "line_no": 9, "reason": "gems에 쓸 수 없는 값(fear)이 있습니다." },
         { "file": "scene_embeddings.muq-mulan.parquet", "reason": "벡터의 차원이 512가 아닙니다." }
       ]
     }
     ```
 
-    적재가 성공했을 때에는 `errors`가 빈 목록입니다.
-
-    ```json
-    {
-      "id": "5f0e2b7c-1a3d-4c9e-8b6f-0d2a4c6e8f10",
-      "bundle_type": "book",
-      "status": "done",
-      "errors": []
-    }
-    ```
-
-  - **설명**: `status`는 `pending`, `done`, `failed` 가운데 하나입니다. 실패했다면 무엇이 잘못됐는지가 `errors`에 담깁니다.
+  - **설명**: 에러의 형식은 2.3절과 같고, `detail`이 `{ "file", "line_no", "reason" }`의 목록입니다. 묶음의 규격과 검증 항목은 [AI_CONTRACT.md](AI_CONTRACT.md)에 정의되어 있습니다. 백엔드는 검증과 적재를 모두 마친 뒤에 응답하므로, 적재의 결과를 따로 조회하는 엔드포인트는 없습니다([ADR-019](ADR.md#adr-019-정확-검색과-동기-적재)). 오류의 `line_no`는 그 파일에서 문제가 있는 줄의 번호이며 1부터 셉니다. Parquet 파일처럼 줄을 가리킬 수 없는 파일의 오류에는 `line_no`가 없습니다.
 
 ### 4.10 관리자: 허용 목록
 
@@ -596,9 +579,11 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
   - **Response Body**
 
     ```csv
-    recommendation_id,created_at,user_email,book_id,book_version,scene_id,strategy,selection_reason,embedding_model,track_id,segment_start_ms,similarity
-    c41e7a90-...,2026-12-01T12:01:10Z,reader@example.com,sample-novel,1,scene_0007,embedding,embedding,muq-mulan,trk_0042,30000,0.412
+    recommendation_id,created_at,user_email,book_id,book_version,scene_id,strategy,selection_reason,embedding_model,track_id,segment_id,segment_start_ms,similarity,scene_valence,scene_arousal,scene_tags,scene_gems,segment_valence,segment_arousal,segment_tags,segment_gems
+    c41e7a90-...,2026-12-01T12:01:10Z,reader@example.com,sample-novel,1,scene_0007,embedding,embedding,muq-mulan,trk_0042,trk_0042_s00,0,0.412,-0.6,-0.35,sad|melancholic,sadness,-0.55,-0.4,sad|melancholic,sadness|nostalgia
     ```
+
+  - **설명**: 뒤의 여덟 열은 그 장면과 뽑힌 구간의 평가 라벨입니다([AI_CONTRACT.md 2절](AI_CONTRACT.md#라벨에-대한-규칙)). `tags`와 `gems`처럼 값이 여러 개인 열은 한 칸 안에서 `|`로 잇습니다. 이 열들로 장면과 구간의 V-A 거리, 태그와 GEMS 차원의 일치 여부를 계산할 수 있습니다.
 
 - **`GET /api/admin/exports/playback-events`**: 반응 기록을 CSV로 내려받습니다.
   - **Request Header**

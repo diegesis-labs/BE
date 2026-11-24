@@ -67,8 +67,8 @@ description: 허용된 사용자가 책 목록과 챕터 본문을 받는 Epic�
 
 | Task | 내용 | 산출물 |
 | --- | --- | --- |
-| T3.1.1 | 책, 챕터, 문장의 테이블을 선언합니다. | `app/books/models.py`, 마이그레이션 |
-| T3.1.2 | 책 목록과 챕터의 문장을 읽는 repository를 만듭니다. | `app/books/repository.py` |
+| T3.1.1 | 책, 책 버전, 챕터의 테이블을 선언합니다. | `app/books/models.py`, 마이그레이션 |
+| T3.1.2 | 책 목록과 챕터 본문을 읽는 repository를 만듭니다. | `app/books/repository.py` |
 
 **대응**: API.md 4.5절, ARCHITECTURE.md 6절
 
