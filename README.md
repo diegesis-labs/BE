@@ -47,6 +47,16 @@ docker compose down                 # 서버와 데이터베이스를 내립니�
 
 `docker compose ps -a`를 실행하면 `migrate` 서비스가 `Exited (0)`, 곧 종료된 상태로 보이며, 이것이 정상입니다. `migrate`는 서버와 같은 이미지로 마이그레이션을 한 번 실행하고 끝나는 서비스이고, 서버는 이 서비스가 성공한 뒤에야 뜹니다([docs/DECISIONS.md](docs/DECISIONS.md)의 D-40). 종료 코드가 0이 아니라면 마이그레이션이 실패한 것이므로 `docker compose logs migrate`로 원인을 봅니다.
 
+세 서비스가 뜨는 순서는 다음과 같습니다. 앞의 서비스가 화살표에 적힌 상태가 되어야 다음 서비스가 뜹니다.
+
+```mermaid
+flowchart LR
+  DB[("db<br/>PostgreSQL + pgvector")] -- "healthy<br/>(TCP로 접속 확인)" --> MIG["migrate<br/>alembic upgrade head"]
+  MIG -- "종료 코드 0으로 끝남" --> API["api<br/>python -m app"]
+  API -- "healthy<br/>(GET /api/health)" --> W["--wait가 끝남"]
+  VOL[("볼륨 db-data")] --- DB
+```
+
 ### 데이터베이스의 데이터
 
 데이터베이스의 데이터는 Docker 볼륨에 저장되므로, `docker compose down`으로 내렸다가 다시 띄워도 그대로 남아 있습니다. 데이터까지 모두 지우고 빈 데이터베이스에서 다시 시작하려면 아래 명령을 씁니다. 지운 데이터는 되돌릴 수 없습니다.

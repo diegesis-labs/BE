@@ -131,6 +131,38 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
    - 목록에 있다면 로그인 상태를 만들고 쿠키를 심은 다음, 브라우저를 프론트엔드의 첫 화면으로 보냅니다.
    - 목록에 없다면 쿠키를 심지 않고, 브라우저를 프론트엔드의 `/login?error=NOT_ALLOWED`로 보냅니다.
 
+아래 그림은 이 순서에 로그인한 뒤의 첫 요청까지 이어서 그린 것입니다. 쿠키에 담긴 값은 그대로 저장하지 않고 해시로 바꿔 `login_sessions`에 저장합니다([ARCHITECTURE.md](ARCHITECTURE.md#6-데이터-모델)).
+
+```mermaid
+sequenceDiagram
+  actor U as 브라우저
+  participant BE as 백엔드
+  participant G as Google
+  participant DB as PostgreSQL
+
+  U->>BE: GET /api/auth/google/login
+  BE-->>U: 302 Google 로그인 화면 (state 포함)
+  U->>G: Google 계정으로 로그인
+  G-->>U: 302 /api/auth/google/callback?code&state
+  U->>BE: GET /api/auth/google/callback
+  BE->>BE: state 확인
+  BE->>G: code로 계정의 이메일을 받아 옴
+  BE->>DB: 허용 목록(allowed_emails)에서 이메일 조회
+  alt 목록에 없음
+    BE-->>U: 302 /login?error=NOT_ALLOWED (쿠키 없음)
+  else 목록에 있음
+    BE->>DB: users 등록 또는 조회, login_sessions에 쿠키 값의 해시 저장
+    BE-->>U: 302 프론트엔드 첫 화면 + Set-Cookie
+  end
+  U->>BE: 보호된 경로 요청 (쿠키가 자동으로 붙음)
+  BE->>DB: 쿠키 값의 해시로 login_sessions 조회
+  alt 로그인 상태가 없거나 만료됨
+    BE-->>U: 401 NOT_AUTHENTICATED
+  else 유효함
+    BE-->>U: 정상 응답
+  end
+```
+
 각 엔드포인트의 형식은 다음과 같습니다.
 
 - **`GET /api/auth/google/login`**: 브라우저를 Google 로그인 화면으로 이동시킵니다.
