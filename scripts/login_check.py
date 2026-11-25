@@ -3,9 +3,48 @@
 백엔드 담당자가 프론트엔드 레포 없이, 로컬에서 실제 Google 계정으로 로그인과 로그아웃을 끝까지
 확인하는 도구다(docs/ADR.md의 ADR-026, docs/backlog/epic-1/E1-login-allowlist.md의 S1.7).
 
-사람이 phase의 MANUAL 점검에서 실행한다. 실제 Google 계정과 사람의 입력이 필요하므로
-`scripts/check.sh`와 CI에서는 실행하지 않는다. 검사가 확인하는 것은 Google 없이 확인할 수 있는
-부분뿐이며, 그 테스트는 `tests/infra/test_login_check.py`에 있다.
+## 실행 방법
+
+compose로 서버를 띄우고, 허용 목록에 계정 A를 `user`로 넣은 뒤 실행한다.
+
+    uv run python scripts/login_check.py --allowed-email <허용 목록에 넣은 계정 A> \
+        --denied-email <허용 목록에 없는 계정 B>
+
+`FRONTEND_URL`, `API_PORT`, `DB_PORT`는 compose와 같은 방법으로 정한다. 환경변수가 있으면 그것을,
+없으면 레포 최상위의 `.env`를, 그것도 없으면 compose의 기본값을 쓴다. 대역 서버는 서버가 쓰는 것과
+같은 `FRONTEND_URL`에 떠야 하기 때문이다(E1 T1.7.3).
+
+## 사람이 하는 일
+
+스크립트가 연 브라우저의 Google 화면에서, 안내받은 계정을 고르고 필요하면 비밀번호를 넣는다.
+스크립트는 Google 화면에 아무것도 입력하지 않으며, 비밀번호를 받지 않는다. 그리고 시점마다 출력된
+상태를 docs/backlog/epic-1/testcase.md의 "로컬 로그인 점검의 테이블 상태"와 대조한다. 스크립트도
+같은 표로 판정해서, 다른 것을 끝에 모아 보여 준다.
+
+## 종료 코드
+
+- 0: 모든 시점의 상태가 표와 같다.
+- 1: 표와 다른 것이 있다. 끝에 모아 보여 준다.
+- 2: 명령의 인자가 잘못됐다.
+- 3: 브라우저를 열기 전의 확인(서버, Google 설정, 점검 전의 테이블 상태, 포트)이 어긋났다.
+  브라우저를 열지 않고, 어긋난 것과 고치는 방법을 보여 준다. 상태를 맞추는 SQL은 보여 주기만 한다.
+- 4: 점검을 끝내지 못했다. 로그인을 기다리는 시간이 지났거나, 브라우저가 닫혔거나, 데이터베이스에
+  닿지 못했다.
+
+## 지키는 것
+
+- 사람이 phase의 MANUAL 점검에서 실행한다. 실제 Google 계정과 사람의 입력이 필요하므로
+  `scripts/check.sh`와 CI에서는 실행하지 않는다. 검사가 확인하는 것은 Google 없이 확인할 수 있는
+  부분(대역 서버, 점검 전 확인, 표와의 대조, 출력)뿐이며, 그 테스트는
+  `tests/infra/test_login_check*.py`에 있다. 그래서 판정과 출력은 Playwright와 데이터베이스에서
+  떼어 낸 순수 함수로 두고, 브라우저를 모는 부분은 그 함수들을 부르는 얇은 층으로 둔다.
+- 개발용 데이터베이스를 읽기 전용 트랜잭션으로만 읽는다. 개발자의 데이터를 지우거나 바꾸지 않는다.
+- 브라우저는 점검마다 새 컨텍스트로 열고, 프로필을 디스크에 남기지 않는다. 자동화를 탐지하는 장치를
+  피하는 옵션을 쓰지 않는다. Google이 자동화된 브라우저의 로그인을 막으면, 그때의 방법은 ADR-026의
+  재검토 조건에 따라 사람이 정한다.
+- 쿠키의 값은 읽는 자리에서 바로 SHA-256으로 바꾸고, 값 자체는 어디에도 담지 않는다. 쿠키의 값과
+  `token_hash`의 값은 출력하지 않으며, `token_hash`는 쿠키 값의 SHA-256과 같은지만 출력한다.
+  스크린숏, 트레이스, HAR도 남기지 않는다.
 
 이 파일은 `app/`을 import하지 않는다. 점검 스크립트는 compose로 띄운 서버를 바깥에서 보는 도구다.
 서버의 코드를 끌어오면 서버를 거치지 않은 것을 확인하게 된다.
@@ -32,10 +71,15 @@
 import html
 import http.client
 import threading
-from dataclasses import dataclass
+import uuid
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Self
 from urllib.parse import urlsplit
+
+import asyncpg
 
 # 이 접두사로 시작하는 경로를 백엔드로 넘긴다. 프론트엔드의 개발 서버의 proxy 설정과 같은 꼴이다.
 API_PREFIX = "/api"
@@ -234,3 +278,314 @@ class FrontendStandIn:
         if self._server is None:
             raise RuntimeError("대역 서버가 아직 뜨지 않았다. start()를 먼저 부른다.")
         return self._server.server_port
+
+
+# ---------------------------------------------------------------------------------------------
+# 점검 스크립트
+# ---------------------------------------------------------------------------------------------
+
+SESSION_COOKIE = "diegesis_session"
+STATE_COOKIE = "diegesis_oauth_state"
+
+HEALTH_PATH = "/api/health"
+LOGIN_PATH = "/api/auth/google/login"
+CALLBACK_PATH = "/api/auth/google/callback"
+ME_PATH = "/api/me"
+LOGOUT_PATH = "/api/auth/logout"
+NOT_ALLOWED_PATH = "/login?error=NOT_ALLOWED"
+
+# compose는 서버에 LOGIN_SESSION_TTL_HOURS를 넘기지 않으므로 서버는 기본값을 쓴다
+# (docs/CONFIGURATION.md 3.3절).
+LOGIN_SESSION_TTL = timedelta(hours=336)
+# 표의 "1분 안에서 같다"와 "방금"의 폭.
+TIME_TOLERANCE = timedelta(minutes=1)
+# 사람이 Google 화면에서 계정을 고를 때까지 기다리는 시간의 상한.
+LOGIN_WAIT_SECONDS = 300
+
+# compose.yaml의 기본값과 db 서비스의 로컬 전용 계정.
+DEFAULT_FRONTEND_URL = "http://localhost:5173"
+DEFAULT_API_PORT = 8080
+DEFAULT_DB_PORT = 5432
+DB_USER_AND_PASSWORD = "diegesis:diegesis"
+DB_NAME = "diegesis"
+LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1"})
+
+EXIT_OK = 0
+EXIT_MISMATCH = 1
+EXIT_PREFLIGHT = 3
+EXIT_ABORTED = 4
+
+
+# --- 설정과 인자 ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CheckSettings:
+    """점검이 쓰는 주소. compose와 같은 방법으로 정한다(resolve_settings)."""
+
+    frontend_url: str
+    api_port: int
+    db_port: int
+
+    @property
+    def frontend_host(self) -> str:
+        return urlsplit(self.frontend_url).hostname or ""
+
+    @property
+    def frontend_port(self) -> int:
+        return urlsplit(self.frontend_url).port or 80
+
+    @property
+    def backend_url(self) -> str:
+        return f"http://localhost:{self.api_port}"
+
+    @property
+    def database_url(self) -> str:
+        return f"postgresql://{DB_USER_AND_PASSWORD}@localhost:{self.db_port}/{DB_NAME}"
+
+
+def parse_dotenv(text: str) -> dict[str, str]:
+    """`.env`의 `이름=값` 줄을 읽는다. 빈 줄과 `#`으로 시작하는 줄은 건너뛴다."""
+    raise NotImplementedError
+
+
+def resolve_settings(environ: Mapping[str, str], dotenv: Mapping[str, str]) -> CheckSettings:
+    """compose의 `${이름:-기본값}`과 같은 방법으로 세 값을 정한다. 값이 잘못됐으면 ValueError."""
+    raise NotImplementedError
+
+
+@dataclass(frozen=True)
+class Args:
+    allowed_email: str
+    denied_email: str
+
+
+def parse_args(argv: Sequence[str] | None = None) -> Args:
+    """명령의 인자. 이메일은 소문자로 바꾼다."""
+    raise NotImplementedError
+
+
+# --- 브라우저를 열기 전의 확인 ---------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PreflightProblem:
+    problem: str  # 어긋난 것
+    fix: str  # 고치는 방법
+
+
+def health_problems(status: int | None, *, backend_url: str) -> list[PreflightProblem]:
+    """백엔드의 `GET /api/health`가 200인지. status가 None이면 닿지 못한 것이다."""
+    raise NotImplementedError
+
+
+def login_redirect_problems(
+    status: int | None, location: str | None, *, frontend_url: str
+) -> list[PreflightProblem]:
+    """`GET /api/auth/google/login`의 Location에서 redirect_uri와 client_id를 확인한다."""
+    raise NotImplementedError
+
+
+def frontend_port_problems(frontend_url: str, *, in_use: bool) -> list[PreflightProblem]:
+    """대역 서버가 뜰 `FRONTEND_URL`의 포트가 비어 있는지."""
+    raise NotImplementedError
+
+
+def port_in_use(host: str, port: int) -> bool:
+    """그 주소에 무엇인가가 연결을 받고 있으면 True."""
+    raise NotImplementedError
+
+
+# --- 데이터베이스의 상태 ---------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AllowedRow:
+    email: str
+    role: str
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class UserRow:
+    id: uuid.UUID
+    email: str
+    google_sub: str
+    display_name: str | None
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class SessionRow:
+    """login_sessions의 행. user_email은 users와 이어서 읽은 그 사람의 이메일이다.
+
+    token_hash는 쿠키 값의 SHA-256과 같은지 판정하는 데에만 쓰고 출력하지 않는다. repr에도 넣지
+    않는다.
+    """
+
+    token_hash: str = field(repr=False)
+    user_id: uuid.UUID
+    user_email: str
+    expires_at: datetime
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class DbState:
+    """한 시점의 세 테이블.
+
+    행은 두 계정의 이메일에 관한 것만 담고, session_total은 login_sessions의 전체 행의 수다.
+    """
+
+    allowed: tuple[AllowedRow, ...]
+    users: tuple[UserRow, ...]
+    sessions: tuple[SessionRow, ...]
+    session_total: int
+
+    def allowed_for(self, email: str) -> tuple[AllowedRow, ...]:
+        return tuple(row for row in self.allowed if row.email.lower() == email.lower())
+
+    def users_for(self, email: str) -> tuple[UserRow, ...]:
+        return tuple(row for row in self.users if row.email.lower() == email.lower())
+
+    def sessions_for(self, email: str) -> tuple[SessionRow, ...]:
+        return tuple(row for row in self.sessions if row.user_email.lower() == email.lower())
+
+
+@dataclass(frozen=True)
+class PrecheckProblem:
+    problem: str  # 맞지 않는 조건
+    fix_sql: str  # 그것을 맞추는 SQL. README의 SQL과 같은 꼴(이메일을 lower()로 감쌈)
+
+
+async def connect_read_only(database_url: str) -> asyncpg.Connection:
+    """모든 트랜잭션이 읽기 전용인 연결. 이 연결로는 어떤 행도 바꿀 수 없다."""
+    raise NotImplementedError
+
+
+async def read_db_state(conn: asyncpg.Connection, *, emails: Sequence[str]) -> DbState:
+    """두 계정의 이메일에 관한 세 테이블의 행과 login_sessions의 전체 행 수를 한 번에 읽는다."""
+    raise NotImplementedError
+
+
+def precheck_problems(
+    state: DbState, *, allowed_email: str, denied_email: str
+) -> list[PrecheckProblem]:
+    """testcase.md 두 표의 "로그인 전" 줄과 다른 조건. 모두 맞으면 빈 목록이다."""
+    raise NotImplementedError
+
+
+async def precheck(
+    database_url: str, *, allowed_email: str, denied_email: str
+) -> list[PrecheckProblem]:
+    """점검 전 상태 확인(TC-1.7.2). 데이터베이스를 읽기만 하고, 맞추는 SQL은 실행하지 않는다."""
+    raise NotImplementedError
+
+
+# --- 브라우저의 상태 -------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CookieState:
+    """쿠키 하나. 값은 담지 않고 그 SHA-256만 담는다(repr에도 넣지 않는다)."""
+
+    name: str
+    path: str
+    http_only: bool
+    secure: bool
+    same_site: str
+    value_sha256: str = field(repr=False)
+
+
+@dataclass(frozen=True)
+class FetchResult:
+    """브라우저 안에서 부른 요청의 결과. body는 JSON 객체로 읽혔을 때만 있다."""
+
+    status: int
+    body: dict[str, object] | None
+
+
+@dataclass(frozen=True)
+class BrowserState:
+    url: str
+    cookies: tuple[CookieState, ...]
+    me: FetchResult | None = None
+    logout_status: int | None = None
+
+    def cookies_named(self, name: str) -> tuple[CookieState, ...]:
+        return tuple(cookie for cookie in self.cookies if cookie.name == name)
+
+
+@dataclass(frozen=True)
+class Snapshot:
+    db: DbState
+    browser: BrowserState
+
+
+def frontend_cookies(raw: Iterable[Mapping[str, object]], *, host: str) -> tuple[CookieState, ...]:
+    """Playwright가 돌려준 쿠키 가운데 프론트엔드 주소의 것만, 값을 SHA-256으로 바꿔 담는다."""
+    raise NotImplementedError
+
+
+def fetch_result(status: int, text: str) -> FetchResult:
+    raise NotImplementedError
+
+
+def returned_to_frontend(url: str, frontend_url: str) -> bool:
+    """Google에서 프론트엔드의 화면(`/api` 밖의 경로)으로 돌아왔는지."""
+    raise NotImplementedError
+
+
+# --- 표와의 대조 -----------------------------------------------------------------------------
+
+
+def judge_allowed_before_login(now: Snapshot, *, email: str) -> list[str]:
+    """점검 1의 로그인 전."""
+    raise NotImplementedError
+
+
+def judge_allowed_after_login(
+    now: Snapshot, *, before: Snapshot, email: str, login_at: datetime, frontend_url: str
+) -> list[str]:
+    """점검 1의 로그인 후."""
+    raise NotImplementedError
+
+
+def judge_allowed_before_logout(now: Snapshot, *, after_login: Snapshot, email: str) -> list[str]:
+    """점검 1의 로그아웃 전."""
+    raise NotImplementedError
+
+
+def judge_allowed_after_logout(now: Snapshot, *, before_logout: Snapshot, email: str) -> list[str]:
+    """점검 1의 로그아웃 후."""
+    raise NotImplementedError
+
+
+def judge_denied_before_login(now: Snapshot, *, email: str) -> list[str]:
+    """점검 2의 로그인 전."""
+    raise NotImplementedError
+
+
+def judge_denied_after_attempt(
+    now: Snapshot, *, before: Snapshot, email: str, frontend_url: str
+) -> list[str]:
+    """점검 2의 로그인 시도 후."""
+    raise NotImplementedError
+
+
+# --- 출력 ------------------------------------------------------------------------------------
+
+
+def render_snapshot(
+    title: str, snapshot: Snapshot, *, allowed_email: str, denied_email: str
+) -> str:
+    """한 시점의 세 테이블과 브라우저의 상태. 쿠키의 값과 token_hash의 값은 출력하지 않는다."""
+    raise NotImplementedError
+
+
+def render_preflight(problems: Sequence[PreflightProblem]) -> str:
+    raise NotImplementedError
+
+
+def render_report(mismatches: Sequence[str]) -> str:
+    raise NotImplementedError

@@ -1,8 +1,11 @@
-"""런타임 의존성의 테스트 (ADR-028).
+"""의존성의 테스트 (ADR-026, ADR-028).
 
 서버의 이미지는 `uv sync --locked --no-dev`로 운영 의존성만 설치한다(Dockerfile). 그래서 서버가
 import하는 패키지가 개발 의존성에만 있으면, 테스트는 초록인데 운영 서버는 import에서 죽는다.
 Google 어댑터(app/adapters/google.py)는 httpx로 Google과 통신하므로 httpx가 운영 의존성이어야 한다.
+
+반대로 로컬 로그인 점검 스크립트(scripts/login_check.py)가 쓰는 Playwright는 서버의 이미지에
+들어가지 않도록 개발 의존성에만 둔다(ADR-026).
 """
 
 import re
@@ -99,3 +102,10 @@ def test_no_oauth_or_jwt_library_is_a_dependency() -> None:
     dependencies = runtime_dependencies() | dev_dependencies() | locked_runtime_dependencies()
 
     assert OAUTH_OR_JWT_LIBRARIES.isdisjoint(dependencies), OAUTH_OR_JWT_LIBRARIES & dependencies
+
+
+def test_playwright_is_a_dev_dependency_only() -> None:
+    assert "playwright" in dev_dependencies()
+    assert "playwright" not in runtime_dependencies()
+    # 이미지가 실제로 설치하는 목록에도 들어가지 않는다.
+    assert "playwright" not in locked_runtime_dependencies()
