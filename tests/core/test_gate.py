@@ -4,7 +4,7 @@ docs/backlog/epic-1/testcase.md의 S1.4 가운데 데이터베이스 없이 확�
 데이터베이스의 변화(만료, SQL로 바꾼 허용 목록과 역할, 행을 바꾸지 않음)는
 tests/core/test_gate_integration.py가 확인한다.
 
-저장소는 app.dependency_overrides[get_auth_repository]로
+관문이 로그인 상태를 찾는 곳(LoginLookup 포트)은 app.dependency_overrides[get_login_lookup]로
 FakeAuthStore(tests/support/auth_fakes.py)를 끼운다. FakeAuthStore는 받은 해시를 lookups에, 쓰기를
 writes에 남긴다.
 """
@@ -12,13 +12,17 @@ writes에 남긴다.
 import logging
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 import httpx
 import pytest
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.repository import UserRecord, get_auth_repository
 from app.core.config import get_settings
+from app.core.gate import get_login_lookup
+from app.core.ports import UserRecord
 from app.core.security import hash_token
 from tests.support.auth_fakes import FakeAuthStore
 from tests.support.gated_app import ADMIN_ROUTE, USER_ROUTE, create_gated_app
@@ -47,7 +51,7 @@ def store() -> FakeAuthStore:
 @pytest.fixture
 def client(store: FakeAuthStore) -> Iterator[TestClient]:
     app = create_gated_app()
-    app.dependency_overrides[get_auth_repository] = lambda: store
+    app.dependency_overrides[get_login_lookup] = lambda: store
     with TestClient(app) as test_client:
         yield test_client
 
@@ -135,6 +139,20 @@ def test_request_with_unknown_cookie_is_not_authenticated(
     assert_error(response, 401, "NOT_AUTHENTICATED")
     # 쿠키 값이 아니라 그 해시로 조회한다(docs/ARCHITECTURE.md 6절).
     assert store.lookups == [hash_token(UNKNOWN_TOKEN)]
+
+
+# --- 로그인 상태를 찾는 곳의 조립 -------------------------------------------
+
+
+def test_login_lookup_without_factory_fails_loudly() -> None:
+    """create_app()을 거치지 않아 찾는 곳이 조립되지 않은 앱은 바로 드러나야 한다.
+
+    조용히 None을 돌려주거나 다른 저장소를 쓰면 관문이 엉뚱한 곳을 보고도 통과할 수 있다.
+    """
+    request = Request({"type": "http", "app": FastAPI()})
+
+    with pytest.raises(RuntimeError, match="set_login_lookup_factory"):
+        get_login_lookup(request, cast(AsyncSession, object()))
 
 
 # --- 쿠키가 없을 때 데이터베이스에 닿지 않음 --------------------------------

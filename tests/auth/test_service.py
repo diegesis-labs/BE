@@ -22,10 +22,9 @@ from typing import Any
 
 import pytest
 
-from app.auth.repository import UserRecord
 from app.auth.service import AuthService, LoginRejected, LoginResult, LoginSucceeded
 from app.core import security
-from app.core.ports import LoginFailedError
+from app.core.ports import LoginFailedError, UserRecord
 from tests.support.auth_fakes import (
     READER_IDENTITY,
     AuthorizationUrlCall,
@@ -571,9 +570,9 @@ async def test_success_does_not_log_tokens(
 # (docs/ARCHITECTURE.md 8절, E1 "못 박을 것").
 FORBIDDEN_MODULES = ("fastapi", "sqlalchemy", "httpx", "app.adapters")
 SERVICE_PACKAGE = "app.auth"
-# service가 app/에서 가져와도 되는 것. repository에서는 레코드 타입만 가져온다. AuthRepository를
-# 가져오면 SQLAlchemy에 기대게 된다.
-REPOSITORY_RECORDS = frozenset({"AllowedEmail", "UserRecord", "ActiveLogin"})
+# service가 app/에서 가져와도 되는 것은 app/core/의 security와 ports뿐이다. 저장소의 레코드도
+# 포트(app/core/ports.py)에서 가져온다. repository에서 가져오면 service가 포트가 아니라 저장소의
+# 구현에 기대게 된다(docs/ARCHITECTURE.md 8절, ADR-029).
 
 
 def imported_names(source: str, package: str = SERVICE_PACKAGE) -> set[str]:
@@ -600,10 +599,7 @@ def is_forbidden(name: str) -> bool:
 
 
 def is_allowed_app_import(name: str) -> bool:
-    if name in {"app.core.security", "app.core.ports"} or name.startswith("app.core.ports."):
-        return True
-    module, _, attribute = name.rpartition(".")
-    return module == "app.auth.repository" and attribute in REPOSITORY_RECORDS
+    return name in {"app.core.security", "app.core.ports"} or name.startswith("app.core.ports.")
 
 
 @pytest.mark.parametrize(
@@ -638,7 +634,8 @@ def test_forbidden_import_detector(source: str, forbidden: set[str]) -> None:
     [
         ("app.core.security", True),
         ("app.core.ports.IdentityProvider", True),
-        ("app.auth.repository.UserRecord", True),
+        ("app.core.ports.UserRecord", True),
+        ("app.auth.repository.UserRecord", False),
         ("app.auth.repository.AuthRepository", False),
         ("app.auth.repository", False),
         ("app.core.database.DbSession", False),

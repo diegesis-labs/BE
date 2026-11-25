@@ -34,10 +34,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from app.auth.repository import AuthRepository, UserRecord, get_auth_repository
+from app.auth.repository import AuthRepository, get_auth_repository
 from app.auth.router import get_identity_provider
 from app.core.database import DbSession, create_engine
-from app.core.ports import Identity
+from app.core.ports import Identity, UserRecord
 from app.main import create_app
 from tests.support.auth_fakes import READER_IDENTITY, FakeIdentityProvider
 from tests.support.settings import TEST_FRONTEND_URL

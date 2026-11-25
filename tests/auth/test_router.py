@@ -7,7 +7,8 @@ TC-1.5.1, TC-1.2.1의 Host 부분, TC-1.3.12, TC-1.5.3을 확인한다. 동작 �
 - 앱은 create_app()으로 만든다. 경로를 따로 만든 앱에만 붙여서 확인하면, create_app()이 경로를
   등록하지 않거나 어댑터를 잇지 않아도 초록이 되기 때문이다.
 - 신원은 app.dependency_overrides[get_identity_provider]로 FakeIdentityProvider를, 저장소는
-  app.dependency_overrides[get_auth_repository]로 FakeAuthStore를 끼운다. 실제 Google 어댑터로
+  app.dependency_overrides[get_auth_repository]로 FakeAuthStore를 끼운다. 관문이 로그인 상태를 찾는
+  곳(get_login_lookup)에도 같은 FakeAuthStore를 끼운다. 실제 Google 어댑터로
   확인하는 TC-1.5.1과 TC-1.2.1만 아무것도 덮어쓰지 않는다. 그 어댑터는 로그인 시작에서 네트워크를
   쓰지 않고, 데이터베이스의 세션은 첫 질의 전에는 접속하지 않으므로 닿지 않는 DATABASE_URL로도
   돈다.
@@ -39,6 +40,7 @@ from app.auth.repository import get_auth_repository
 from app.auth.router import get_identity_provider
 from app.core import security
 from app.core.config import get_settings
+from app.core.gate import get_login_lookup
 from app.core.ports import LoginFailedError
 from app.main import create_app
 from tests.support.auth_fakes import (
@@ -184,6 +186,7 @@ def make_app(store: FakeAuthStore, provider: FakeIdentityProvider) -> FastAPI:
     app = create_app()
     app.dependency_overrides[get_identity_provider] = lambda: provider
     app.dependency_overrides[get_auth_repository] = lambda: store
+    app.dependency_overrides[get_login_lookup] = lambda: store
     return app
 
 

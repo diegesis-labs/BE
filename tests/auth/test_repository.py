@@ -16,7 +16,8 @@ import pytest
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from app.auth.repository import ActiveLogin, AllowedEmail, AuthRepository, UserRecord
+from app.auth.repository import AuthRepository
+from app.core.ports import ActiveLogin, AllowedEmail, UserRecord
 
 pytestmark = pytest.mark.integration
 

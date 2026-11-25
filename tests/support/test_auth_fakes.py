@@ -12,8 +12,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from app.auth.repository import ActiveLogin, AllowedEmail
-from app.core.ports import Identity, LoginFailedError
+from app.core.ports import ActiveLogin, AllowedEmail, Identity, LoginFailedError
 from tests.support.auth_fakes import (
     FAKE_AUTHORIZATION_ENDPOINT,
     READER_IDENTITY,

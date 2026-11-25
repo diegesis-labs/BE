@@ -15,8 +15,7 @@ from typing import Any
 from urllib.parse import urlencode
 from uuid import UUID, uuid4
 
-from app.auth.repository import ActiveLogin, AllowedEmail, UserRecord
-from app.core.ports import Identity, LoginFailedError
+from app.core.ports import ActiveLogin, AllowedEmail, Identity, LoginFailedError, UserRecord
 
 # docs/backlog/epic-1/testcase.md의 "정상 ID 토큰"과 같은 신원.
 READER_IDENTITY = Identity(
