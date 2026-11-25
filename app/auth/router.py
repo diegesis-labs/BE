@@ -1,4 +1,4 @@
-"""Google 로그인을 시작하는 경로와 로그인 결과를 받는 경로(docs/API.md 4.2절).
+"""Google 로그인의 두 경로, 로그아웃, 내 정보(docs/API.md 4.2절, 4.3절).
 
 무엇을 확인하고 무엇을 쓰는지는 service(app/auth/service.py)가 정한다. 라우터는 쿼리와 쿠키를
 service에 넘기고, 그 결과를 리디렉션 주소와 쿠키로 바꾼다. 이 모듈이 지키는 것은 다음과 같다.
@@ -17,6 +17,9 @@ service에 넘기고, 그 결과를 리디렉션 주소와 쿠키로 바꾼다. 
 - 임의의 값을 만들지 않는다. service가 security.new_token()으로 만든다(ADR-027).
 - 성공했을 때의 쓰기는 DbSession(app/core/database.py)이 경로 함수가 끝난 뒤, 응답을 보내기 전에
   커밋한다. 커밋이 실패하면 이 경로가 만든 응답과 쿠키는 나가지 않고 500이 나간다.
+- 로그아웃은 관문을 걸지 않는 공개 경로이고, 출처 확인은 앱 전체의 미들웨어가 건다. 로그아웃은
+  POST로만 받는다. 내 정보는 관문(require_user)이 돌려준 값을 그대로 응답하고, 역할이나 이름을 따로
+  담아 두지 않는다(ADR-024).
 """
 
 from collections.abc import Callable
@@ -27,8 +30,10 @@ from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.responses import RedirectResponse, Response
 
 from app.auth.repository import AuthRepository, get_auth_repository
+from app.auth.schemas import MeResponse
 from app.auth.service import AuthService, LoginSucceeded
 from app.core.config import Settings, get_settings
+from app.core.gate import CurrentUser, require_user
 from app.core.ports import IdentityProvider
 
 router = APIRouter(prefix="/api", tags=["auth"])
@@ -156,5 +161,31 @@ async def finish_google_login(
 
 
 @router.post("/auth/logout", status_code=204)
-async def logout() -> Response:
-    return Response(status_code=204)
+async def logout(request: Request, service: AuthServiceDependency) -> Response:
+    """요청에 붙은 쿠키의 로그인 상태 하나를 지우고, 브라우저의 쿠키도 지운다.
+
+    관문을 걸지 않는다. 쿠키가 없거나 모르는 값이어도, 허용 목록에서 빠진 사람이어도 204다
+    (ADR-025). 그래서 프론트엔드는 로그인 상태를 확인하지 않고 불러도 된다. 같은 사람이 다른
+    기기에서 만든 로그인 상태는 그대로 둔다.
+    """
+    settings = get_settings()
+    await service.logout(request.cookies.get(settings.login_cookie_name))
+    response = Response(status_code=204)
+    # 심을 때와 같은 이름, 경로, 속성으로 지운다. 브라우저는 이름과 경로가 모두 같은 쿠키만 지운다.
+    response.headers.append(
+        "set-cookie",
+        _set_cookie_header(
+            settings.login_cookie_name,
+            "",
+            path=SESSION_COOKIE_PATH,
+            max_age=0,
+            secure=settings.cookie_secure,
+        ),
+    )
+    return response
+
+
+@router.get("/me")
+async def get_me(user: Annotated[CurrentUser, Depends(require_user)]) -> MeResponse:
+    """로그인한 사용자 자신의 정보. role은 관문이 이번 요청에서 허용 목록에서 읽은 값이다."""
+    return MeResponse.model_validate(user)
