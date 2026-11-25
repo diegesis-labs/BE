@@ -7,7 +7,9 @@
 
 from fastapi import FastAPI
 
+from app.adapters.google import GoogleIdentityProvider
 from app.auth.router import router as auth_router
+from app.auth.router import set_identity_provider_factory
 from app.core.database import database_lifespan
 from app.core.errors import register_error_handlers
 from app.core.origin import OriginCheckMiddleware
@@ -35,6 +37,10 @@ def create_app() -> FastAPI:
     app.add_middleware(OriginCheckMiddleware)
     app.include_router(health_router)
     app.include_router(auth_router)
+    # 로그인 경로의 신원 제공자는 Google 어댑터다. 어댑터를 아는 곳은 이 파일뿐이다
+    # (docs/ARCHITECTURE.md 8절). 어댑터 자체가 아니라 설정으로 어댑터를 만드는 함수를 넣어 두므로,
+    # 여기서는 설정을 읽지 않는다. 어댑터는 로그인 경로가 요청을 받았을 때 만든다.
+    set_identity_provider_factory(app, GoogleIdentityProvider.from_settings)
     return app
 
 

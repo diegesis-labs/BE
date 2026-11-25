@@ -593,9 +593,15 @@ def capture_server_logs(caplog: pytest.LogCaptureFixture) -> None:
 
     httpx 로거만 WARNING으로 올린다. TestClient는 httpx의 클라이언트라서 요청한 주소(code와 state가
     든 쿼리 포함)를 INFO로 남기는데, 그것은 서버가 아니라 이 테스트의 클라이언트가 남긴 로그다.
+
+    caplog.set_level은 로거와 함께 caplog의 처리기의 레벨도 바꾸므로, httpx를 먼저 올리고 전체를
+    나중에 DEBUG로 둔다. 순서가 바뀌면 처리기가 WARNING이 되어 서버의 INFO와 DEBUG 기록이 버려지고,
+    그 기록에 비밀값이 있어도 이 검사가 초록이 된다.
     """
-    caplog.set_level(logging.DEBUG)
     caplog.set_level(logging.WARNING, logger="httpx")
+    caplog.set_level(logging.DEBUG)
+    assert caplog.handler.level == logging.DEBUG
+    assert logging.getLogger("app").getEffectiveLevel() == logging.DEBUG
 
 
 def app_log_messages(caplog: pytest.LogCaptureFixture) -> list[str]:
