@@ -1220,7 +1220,7 @@ CSRF를 막는 장치는 다음 세 후보를 비교했습니다.
 - A안을 씁니다. 공통 층(`app/core/`)은 기능 폴더와 어댑터를 import하지 않습니다.
 - 관문은 `LoginLookup` 포트(`app/core/ports.py`)로 로그인 상태를 찾습니다. 그 구현체는 `AuthRepository`이며, `create_app()`이 요청의 데이터베이스 세션으로 만드는 함수를 넣습니다(`set_login_lookup_factory`).
 - 공통 층과 기능 폴더의 `service`가 함께 쓰는 저장소의 레코드(`AllowedEmail`, `UserRecord`, `ActiveLogin`)는 `app/core/ports.py`에 둡니다. `service`는 레코드도 포트에서 가져오며 `repository`를 import하지 않습니다.
-- 이 방향은 테스트(`tests/core/test_dependency_direction.py`, `tests/auth/test_service.py`)로 확인합니다.
+- 이 방향은 테스트(`tests/core/test___init__.py`, `tests/auth/test_service.py`)로 확인합니다.
 
 ### 근거
 
@@ -1230,7 +1230,7 @@ CSRF를 막는 장치는 다음 세 후보를 비교했습니다.
 
 ### 재검토 조건
 
-- 로그인 상태를 데이터베이스가 아닌 곳(예: 전용 세션 저장소)에 두게 되면, `LoginLookup`의 구현체만 바꾸면 되는지 다시 확인합니다.
+- 로그인 상태를 데이터베이스가 아닌 곳(예: 로그인 상태 전용 저장소)에 두게 되면, `LoginLookup`의 구현체만 바꾸면 되는지 다시 확인합니다.
 
 ---
 
