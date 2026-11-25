@@ -6,15 +6,26 @@
 
 앱을 만드는 테스트는 `app_env`로 설정을 준비한다. 설정을 준비하는 방법을 테스트마다 따로 두지
 않는다.
+
+데이터베이스를 읽고 쓰는 통합 테스트는 `clean_db`로 빈 테이블에서 시작하고, 테스트 안에서 직접
+읽고 쓸 때에는 `db_engine`이나 `db_session_factory`를 쓴다.
 """
 
-from collections.abc import Iterator
+import asyncio
+from collections.abc import AsyncIterator, Coroutine, Iterator
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 import pytest
 from alembic import command
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from testcontainers.community.postgres import PostgresContainer
 
+from app.auth import models as auth_models
 from app.core.config import get_settings
+from app.core.database import create_engine, create_session_factory
+from app.core.models import Base
 from tests.support.postgres import alembic_config, start_database
 from tests.support.settings import (
     SETTING_ENV_NAMES,
@@ -27,6 +38,10 @@ from tests.support.settings import (
 # 아래 fixture를 쓰는 테스트 실행을 따로 돌려서 그 결과(건너뛰기인지 오류인지)를 확인하는 데 쓴다
 # (tests/support/test_postgres.py의 TC-0.2.5).
 pytest_plugins = ["pytester"]
+
+# 모델 모듈을 import해야 그 테이블이 Base.metadata에 실리고, clean_db가 그 테이블을 비운다.
+# migrations/env.py의 MODEL_MODULES와 같은 모듈을 둔다.
+MODEL_MODULES = (auth_models,)
 
 
 @pytest.fixture(scope="session")
@@ -75,3 +90,64 @@ def app_env(
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
+
+
+def run_in_new_event_loop[T](coroutine: Coroutine[Any, Any, T]) -> T:
+    """코루틴을 다른 스레드의 새 이벤트 루프에서 끝까지 돌린다.
+
+    동기 fixture는 비동기 테스트의 이벤트 루프가 이미 만들어진 뒤에 불릴 수 있다. 같은 스레드에서
+    asyncio.run()을 부르면 그 스레드의 현재 이벤트 루프를 바꿔 놓으므로, 다른 스레드에서 돌린다.
+    """
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(asyncio.run, coroutine).result()
+
+
+async def truncate_tables(url: str) -> None:
+    """Base.metadata의 모든 테이블을 비운다."""
+    tables = Base.metadata.sorted_tables
+    if not tables:
+        return
+    engine = create_engine(url)
+    try:
+        async with engine.begin() as connection:
+            preparer = connection.dialect.identifier_preparer
+            names = ", ".join(preparer.format_table(table) for table in tables)
+            await connection.execute(text(f"TRUNCATE {names} CASCADE"))
+    finally:
+        await engine.dispose()
+
+
+@pytest.fixture
+def clean_db(app_env: None, database_url: str, monkeypatch: pytest.MonkeyPatch) -> str:
+    """테이블을 모두 비운 통합 테스트용 데이터베이스의 주소. `database_url`과 같은 값이다.
+
+    - `app_env`의 설정 위에서 DATABASE_URL만 이 주소로 바꾼다. 그래서 get_settings()로 엔진을 만드는
+      코드(앱, 마이그레이션)도 이 데이터베이스에 접속한다.
+    - 테이블은 테스트가 끝날 때가 아니라 시작할 때 비운다. 앞 테스트가 중간에 실패해도 다음 테스트가
+      깨끗한 상태에서 시작한다.
+    - 동기 fixture이므로 동기 테스트(TestClient)와 비동기 테스트에서 모두 쓸 수 있다.
+    """
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    get_settings.cache_clear()
+    run_in_new_event_loop(truncate_tables(database_url))
+    return database_url
+
+
+@pytest.fixture
+async def db_engine(clean_db: str) -> AsyncIterator[AsyncEngine]:
+    """`clean_db`의 데이터베이스에 접속하는 엔진. 테스트가 데이터베이스를 직접 읽고 쓸 때 쓴다.
+
+    엔진은 테스트마다 새로 만들고 테스트가 끝나면 닫는다. pytest-asyncio는 테스트마다 이벤트 루프를
+    새로 만드는데(pyproject.toml), 다른 루프에서 만든 asyncpg 연결은 다시 쓸 수 없기 때문이다.
+    """
+    engine = create_engine(clean_db)
+    try:
+        yield engine
+    finally:
+        await engine.dispose()
+
+
+@pytest.fixture
+def db_session_factory(db_engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
+    """`db_engine`으로 비동기 세션을 만드는 팩토리. 앱과 같은 설정(create_session_factory)이다."""
+    return create_session_factory(db_engine)
