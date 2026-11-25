@@ -23,7 +23,9 @@ class Settings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     # 기본값이 없는 값(database_url, frontend_url, google_client_id, google_client_secret)은
     # 값이 없으면 설정을 읽는 순간 실패해야 한다.
-    database_url: str
+    # DATABASE_URL은 빈 값도 거부한다. 빈 값으로 뜬 서버는 헬스체크만 통과하고 데이터베이스를 쓰는
+    # 요청은 모두 500이 되므로, 시작하는 순간 알아야 한다(docs/CONFIGURATION.md 1절, 3.2절).
+    database_url: str = Field(min_length=1)
 
     frontend_url: str
     # Google의 두 값은 빈 문자열을 받아들인다. CI의 compose 스모크는 이 값 없이 서버를 띄우며,

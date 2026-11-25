@@ -29,7 +29,7 @@ _USER_COLUMNS = (UserModel.id, UserModel.email, UserModel.google_sub, UserModel.
 
 
 class AuthRepository:
-    """AuthStore(app/auth/service.py)와 LoginLookup(app/core/ports.py)을 구조적으로 만족한다.
+    """AuthStore와 LoginLookup(app/core/ports.py)을 구조적으로 만족한다.
 
     돌려주는 레코드는 포트의 것(app/core/ports.py)이다(ADR-029).
     """

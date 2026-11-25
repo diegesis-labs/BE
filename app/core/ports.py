@@ -3,8 +3,9 @@
 이 파일에는 선언만 둔다. 포트는 특정 기술의 이름을 알지 못하며, 실제 구현은 app/adapters/의
 어댑터나 기능 폴더의 repository가 맡는다. 그 기능의 Epic이 필요한 포트만 여기에 더한다.
 
-app/core/는 기능 폴더를 import하지 않는다. 그래서 공통 층(관문)과 기능 폴더의 service가 함께 쓰는
-저장소의 레코드도 여기에 둔다(ADR-029).
+app/core/는 기능 폴더를 import하지 않는다. 핵심 로직이 저장소에 기대하는 약속(관문의 LoginLookup,
+로그인 service의 AuthStore)과 그 약속이 주고받는 레코드도 포트이므로 여기에 둔다. Protocol은 이
+파일에만 선언한다(ADR-029).
 """
 
 from dataclasses import dataclass
@@ -42,6 +43,36 @@ class ActiveLogin:
     user: UserRecord
     session_created_at: datetime
     allowed: AllowedEmail | None
+
+
+class AuthStore(Protocol):
+    """로그인 service(app/auth/service.py)가 저장소에 기대하는 것.
+
+    app/auth/repository.py의 AuthRepository가 구조적으로 만족하며, 라우터의 의존성이 넣는다.
+    커밋하지 않는다. 트랜잭션의 경계는 요청의 데이터베이스 세션이 정한다.
+    """
+
+    async def get_allowed_email(self, email: str) -> AllowedEmail | None: ...
+
+    async def find_users_by_email_or_sub(
+        self, *, email: str, google_sub: str
+    ) -> list[UserRecord]: ...
+
+    async def create_user(
+        self, *, email: str, google_sub: str, display_name: str | None
+    ) -> UserRecord | None:
+        """같은 이메일이나 같은 google_sub의 행이 이미 있으면 만들지 않고 None을 돌려준다."""
+        ...
+
+    async def update_display_name(self, user_id: UUID, display_name: str | None) -> None: ...
+
+    async def add_login_session(
+        self, *, token_hash: str, user_id: UUID, expires_at: datetime
+    ) -> None: ...
+
+    async def delete_login_session(self, token_hash: str) -> None: ...
+
+    async def delete_expired_login_sessions(self, user_id: UUID) -> None: ...
 
 
 class LoginLookup(Protocol):

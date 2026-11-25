@@ -20,46 +20,22 @@ docs/ARCHITECTURE.md 6절에, 결정의 이유는 ADR-024, ADR-025, ADR-027에 �
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Literal, Protocol
-from uuid import UUID
+from typing import Literal
 
 from app.core import security
-from app.core.ports import AllowedEmail, Identity, IdentityProvider, LoginFailedError, UserRecord
+from app.core.ports import (
+    AuthStore,
+    Identity,
+    IdentityProvider,
+    LoginFailedError,
+    UserRecord,
+)
 
 logger = logging.getLogger(__name__)
 
 # diegesis_oauth_state 쿠키는 "{state}.{nonce}.{code_verifier}"다. 세 값은 base64url 문자만 쓰므로
 # `.`이 들어 있지 않다(docs/API.md 4.2절).
 STATE_COOKIE_SEPARATOR = "."
-
-
-class AuthStore(Protocol):
-    """service가 저장소에 기대하는 것.
-
-    app/auth/repository.py의 AuthRepository가 구조적으로 만족한다.
-    """
-
-    async def get_allowed_email(self, email: str) -> AllowedEmail | None: ...
-
-    async def find_users_by_email_or_sub(
-        self, *, email: str, google_sub: str
-    ) -> list[UserRecord]: ...
-
-    async def create_user(
-        self, *, email: str, google_sub: str, display_name: str | None
-    ) -> UserRecord | None:
-        """같은 이메일이나 같은 google_sub의 행이 이미 있으면 만들지 않고 None을 돌려준다."""
-        ...
-
-    async def update_display_name(self, user_id: UUID, display_name: str | None) -> None: ...
-
-    async def add_login_session(
-        self, *, token_hash: str, user_id: UUID, expires_at: datetime
-    ) -> None: ...
-
-    async def delete_login_session(self, token_hash: str) -> None: ...
-
-    async def delete_expired_login_sessions(self, user_id: UUID) -> None: ...
 
 
 @dataclass(frozen=True)

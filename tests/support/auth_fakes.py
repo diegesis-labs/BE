@@ -1,7 +1,7 @@
 """로그인 기능의 테스트가 함께 쓰는 가짜.
 
 - FakeIdentityProvider: IdentityProvider 포트(app/core/ports.py)의 가짜. Google에 닿지 않는다.
-- FakeAuthStore: AuthStore(app/auth/service.py)를 만족하는 메모리 저장소. 데이터베이스에 닿지
+- FakeAuthStore: AuthStore(app/core/ports.py)를 만족하는 메모리 저장소. 데이터베이스에 닿지
   않는다. 관문(app/core/gate.py)이 쓰는 find_active_login도 가진다.
 
 service, 관문, 라우터의 테스트가 이 가짜를 쓴다. 가짜가 지키는 약속은
