@@ -14,7 +14,6 @@ state, nonce, code_verifier, code, 쿠키 값은 서로 다르고 로그의 문�
 import ast
 import logging
 import re
-import sys
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -606,19 +605,42 @@ async def test_success_does_not_log_tokens(
 # service는 특정 기술의 이름을 알지 못한다. Google은 IdentityProvider 포트를 거친다
 # (docs/ARCHITECTURE.md 8절, E1 "못 박을 것").
 #
-# 그래서 service가 가져와도 되는 것을 허용 목록으로 둔다. 표준 라이브러리와, app/에서는 app/core/의
-# security와 ports뿐이다. 그 밖의 것은 모두 특정 기술(fastapi, sqlalchemy, httpx, asyncpg,
-# starlette, pydantic 같은 것)이거나 어댑터이거나 저장소의 구현이다. 금지할 이름을 늘어놓는 방식은
-# 목록에 없는 기술을 가져와도 초록이 된다(3차 리뷰 ARC-1).
+# 그래서 service가 가져와도 되는 것을 허용 목록으로 둔다. 표준 라이브러리 가운데 이름을 적은
+# 모듈과, app/에서는 app/core/의 security와 ports뿐이다. 그 밖의 것은 모두 특정 기술(fastapi,
+# sqlalchemy, httpx, asyncpg, starlette, pydantic, sqlite3, urllib.request 같은 것)이거나
+# 어댑터이거나 저장소의 구현이다. 금지할 이름을 늘어놓는 방식은 목록에 없는 기술을 가져와도 초록이
+# 된다(3차 리뷰 ARC-1).
 SERVICE_PACKAGE = "app.auth"
 # 저장소의 레코드도 포트(app/core/ports.py)에서 가져온다. repository에서 가져오면 service가 포트가
 # 아니라 저장소의 구현에 기대게 된다(docs/ARCHITECTURE.md 8절, ADR-029).
 
 
+# service가 가져와도 되는 표준 라이브러리. 바깥(데이터베이스, 네트워크, 파일, 프로세스)과 닿지 않는
+# 모듈만 이름으로 적는다. 표준 라이브러리를 통째로 허용하면 sqlite3, urllib.request, http.client,
+# socket처럼 데이터베이스와 HTTP를 다루는 모듈과, 모듈을 문자열로 가져오는 builtins와 importlib가
+# 초록이 된다(4차 리뷰 ARC-1). service가 다른 모듈을 써야 하면, 바깥과 닿지 않는지 확인하고 여기에
+# 더한다.
+SERVICE_STANDARD_LIBRARY = frozenset(
+    {
+        "abc",
+        "collections",
+        "dataclasses",
+        "datetime",
+        "enum",
+        "functools",
+        "itertools",
+        "logging",
+        "math",
+        "re",
+        "typing",
+    }
+)
+
 # 문자열로 모듈을 가져오는 함수(2차 리뷰 ARC-1). 인자가 문자열 상수가 아니면 무엇을 가져오는지
-# 정적으로 알 수 없으므로, 아래 이름으로 세어 검사가 닫힌 채 실패하게 한다.
+# 정적으로 알 수 없으므로, 아래 이름으로 세어 검사가 닫힌 채 실패하게 한다. `__import__`는
+# builtins와 importlib에서 가져와 불러도 같은 함수다(4차 리뷰 ARC-1).
 DYNAMIC_IMPORT = "importlib.import_module"
-DYNAMIC_IMPORT_BUILTIN = "__import__"
+DYNAMIC_IMPORT_BUILTINS = frozenset({"__import__", "builtins.__import__", "importlib.__import__"})
 UNKNOWN_DYNAMIC_IMPORT = "<문자열 상수가 아닌 동적 import>"
 
 
@@ -637,7 +659,7 @@ def _dynamic_import_name(node: ast.Call, aliases: dict[str, str], package: str) 
         target = f"{aliases.get(func.value.id, func.value.id)}.{func.attr}"
     else:
         return None
-    if target not in {DYNAMIC_IMPORT, DYNAMIC_IMPORT_BUILTIN}:
+    if target != DYNAMIC_IMPORT and target not in DYNAMIC_IMPORT_BUILTINS:
         return None
     first = node.args[0] if node.args else None
     if not (isinstance(first, ast.Constant) and isinstance(first.value, str)):
@@ -692,8 +714,8 @@ def imported_names(source: str, package: str = SERVICE_PACKAGE) -> set[str]:
     return found
 
 
-def is_standard_library(name: str) -> bool:
-    return name.split(".")[0] in sys.stdlib_module_names
+def is_allowed_standard_library(name: str) -> bool:
+    return name.split(".")[0] in SERVICE_STANDARD_LIBRARY
 
 
 def is_allowed_app_import(name: str) -> bool:
@@ -701,11 +723,12 @@ def is_allowed_app_import(name: str) -> bool:
 
 
 def is_forbidden(name: str) -> bool:
-    """service가 가져오면 안 되는 이름인가. 허용 목록(표준 라이브러리, app.core.security,
-    app.core.ports)에 없으면 모두 금지다. 무엇을 가져오는지 모르는 동적 import도 금지로 본다."""
+    """service가 가져오면 안 되는 이름인가. 허용 목록(이름을 적은 표준 라이브러리,
+    app.core.security, app.core.ports)에 없으면 모두 금지다. 무엇을 가져오는지 모르는 동적 import도
+    금지로 본다."""
     if name == UNKNOWN_DYNAMIC_IMPORT:
         return True
-    return not (is_standard_library(name) or is_allowed_app_import(name))
+    return not (is_allowed_standard_library(name) or is_allowed_app_import(name))
 
 
 @pytest.mark.parametrize(
@@ -728,6 +751,7 @@ def is_forbidden(name: str) -> bool:
         ("from app.core import security", set()),
         ("from app.core.ports import AuthStore, UserRecord", set()),
         ("import logging\nfrom datetime import UTC, datetime", set()),
+        ("from collections.abc import Callable\nfrom typing import Literal", set()),
         # 허용 목록이다. 목록에 없는 기술은 이름이 무엇이든 금지다(3차 리뷰 ARC-1).
         ("import asyncpg", {"asyncpg"}),
         ("from starlette.requests import Request", {"starlette.requests.Request"}),
@@ -737,18 +761,37 @@ def is_forbidden(name: str) -> bool:
         ("from app.adaptersx import thing", {"app.adaptersx.thing"}),
         ("from app.auth.repository import AuthRepository", {"app.auth.repository.AuthRepository"}),
         ("from app.core.config import get_settings", {"app.core.config.get_settings"}),
-        # 문자열로 가져오기(2차 리뷰 ARC-1)
-        ("import importlib\ndef f():\n    return importlib.import_module('httpx')", {"httpx"}),
-        ("import importlib as il\nil.import_module('fastapi')", {"fastapi"}),
+        # 표준 라이브러리도 이름을 적은 것만 허용한다. 데이터베이스와 HTTP를 다루는 모듈은
+        # 표준 라이브러리여도 금지다(4차 리뷰 ARC-1).
+        ("import sqlite3", {"sqlite3"}),
+        ("from urllib.request import urlopen", {"urllib.request.urlopen"}),
+        ("import http.client", {"http.client"}),
+        ("import socket", {"socket"}),
+        # 문자열로 가져오기(2차 리뷰 ARC-1). importlib 자체도 허용 목록에 없다.
+        (
+            "import importlib\ndef f():\n    return importlib.import_module('httpx')",
+            {"importlib", "httpx"},
+        ),
+        ("import importlib as il\nil.import_module('fastapi')", {"importlib", "fastapi"}),
         (
             "from importlib import import_module as load\nload('app.adapters.google')",
-            {"app.adapters.google"},
+            {"importlib.import_module", "app.adapters.google"},
         ),
         ("__import__('sqlalchemy.ext.asyncio')", {"sqlalchemy.ext.asyncio"}),
-        ("import importlib\nimportlib.import_module('..adapters', 'app.auth')", {"app.adapters"}),
-        ("import importlib\nimportlib.import_module(NAME)", {UNKNOWN_DYNAMIC_IMPORT}),
+        (
+            "import importlib\nimportlib.import_module('..adapters', 'app.auth')",
+            {"importlib", "app.adapters"},
+        ),
+        ("import importlib\nimportlib.import_module(NAME)", {"importlib", UNKNOWN_DYNAMIC_IMPORT}),
         ("__import__(NAME)", {UNKNOWN_DYNAMIC_IMPORT}),
-        ("import importlib\nimportlib.import_module('json')", set()),
+        ("__import__('logging')", set()),
+        # builtins와 importlib의 __import__로 가져와도, 무엇을 가져오는지 센다(4차 리뷰 ARC-1).
+        ("import builtins\nbuiltins.__import__('sqlite3')", {"builtins", "sqlite3"}),
+        (
+            "from builtins import __import__ as load\nload('httpx')",
+            {"builtins.__import__", "httpx"},
+        ),
+        ("import importlib\nimportlib.__import__('httpx')", {"importlib", "httpx"}),
     ],
 )
 def test_forbidden_import_detector(source: str, forbidden: set[str]) -> None:
