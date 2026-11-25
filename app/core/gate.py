@@ -18,20 +18,53 @@
 - 로그인 상태의 행을 바꾸지 않는다. 만료 시각을 늘리거나 마지막 사용 시각을 기록하지 않는다
   (ADR-027).
 - 쿠키 값을 로그에 남기지 않는다.
+- 기능 폴더를 import하지 않는다. 로그인 상태는 LoginLookup 포트(app/core/ports.py)로 찾고, 그
+  구현체(AuthRepository)는 create_app()이 set_login_lookup_factory로 넣는다(ADR-029).
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import Depends, Request
+from fastapi import Depends, FastAPI, Request
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.repository import ActiveLogin, AuthRepository, get_auth_repository
 from app.core.config import get_settings
+from app.core.database import DbSession
 from app.core.errors import AppError
+from app.core.ports import ActiveLogin, LoginLookup
 from app.core.security import hash_token
 
 ADMIN_ROLE = "admin"
+
+LoginLookupFactory = Callable[[AsyncSession], LoginLookup]
+_LOGIN_LOOKUP_FACTORY = "login_lookup_factory"
+
+
+def set_login_lookup_factory(app: FastAPI, factory: LoginLookupFactory) -> None:
+    """그 앱의 관문이 로그인 상태를 찾을 곳을 요청의 세션으로 만드는 함수를 넣어 둔다.
+
+    create_app()이 부른다. 구현체 자체가 아니라 만드는 함수를 넣는 이유는, 찾는 곳이 요청마다의
+    데이터베이스 세션(get_db_session)을 써야 하기 때문이다.
+    """
+    setattr(app.state, _LOGIN_LOOKUP_FACTORY, factory)
+
+
+def get_login_lookup(request: Request, session: DbSession) -> LoginLookup:
+    """요청을 받은 앱의 관문이 로그인 상태를 찾는 곳. FastAPI 의존성이다.
+
+    세션은 첫 질의를 보낼 때 데이터베이스에 접속하므로(get_db_session), 쿠키가 없어 찾지 않는
+    요청은 데이터베이스에 닿지 않는다. 조립되지 않은 앱이면 바로 실패한다. 조용히 다른 곳을 보면
+    관문이 엉뚱한 저장소를 보고 통과할 수 있기 때문이다.
+    """
+    factory: LoginLookupFactory | None = getattr(request.app.state, _LOGIN_LOOKUP_FACTORY, None)
+    if factory is None:
+        raise RuntimeError(
+            "관문이 로그인 상태를 찾을 곳이 없다. "
+            "create_app()처럼 set_login_lookup_factory를 불러라."
+        )
+    return factory(session)
 
 
 @dataclass(frozen=True)
@@ -66,17 +99,17 @@ def authorize(login: ActiveLogin | None) -> CurrentUser:
 
 
 async def require_user(
-    request: Request, repo: Annotated[AuthRepository, Depends(get_auth_repository)]
+    request: Request, lookup: Annotated[LoginLookup, Depends(get_login_lookup)]
 ) -> CurrentUser:
     """로그인한 사용자를 요구하는 관문.
 
-    repo를 받아도 세션은 첫 질의를 보낼 때 데이터베이스에 접속하므로(get_db_session), 쿠키가 없을
-    때에는 데이터베이스에 닿지 않는다.
+    lookup을 받아도 세션은 첫 질의를 보낼 때 데이터베이스에 접속하므로(get_db_session), 쿠키가
+    없을 때에는 데이터베이스에 닿지 않는다.
     """
     token = request.cookies.get(get_settings().login_cookie_name)
     if not token:
         raise _not_authenticated()
-    return authorize(await repo.find_active_login(hash_token(token)))
+    return authorize(await lookup.find_active_login(hash_token(token)))
 
 
 async def require_admin(user: Annotated[CurrentUser, Depends(require_user)]) -> CurrentUser:

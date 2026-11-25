@@ -23,9 +23,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal, Protocol
 from uuid import UUID
 
-from app.auth.repository import AllowedEmail, UserRecord
 from app.core import security
-from app.core.ports import Identity, IdentityProvider, LoginFailedError
+from app.core.ports import AllowedEmail, Identity, IdentityProvider, LoginFailedError, UserRecord
 
 logger = logging.getLogger(__name__)
 

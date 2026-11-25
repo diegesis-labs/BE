@@ -14,7 +14,6 @@ ORM 객체가 아니라 컬럼을 읽고 문장을 실행한다. 세션의 ident
 위해서다.
 """
 
-from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
@@ -24,38 +23,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.models import AllowedEmailModel, LoginSessionModel, UserModel
 from app.core.database import DbSession
+from app.core.ports import ActiveLogin, AllowedEmail, UserRecord
 
 _USER_COLUMNS = (UserModel.id, UserModel.email, UserModel.google_sub, UserModel.display_name)
 
 
-@dataclass(frozen=True)
-class AllowedEmail:
-    email: str
-    role: str  # "user" 또는 "admin"
-    created_at: datetime
+class AuthRepository:
+    """AuthStore(app/auth/service.py)와 LoginLookup(app/core/ports.py)을 구조적으로 만족한다.
 
-
-@dataclass(frozen=True)
-class UserRecord:
-    id: UUID
-    email: str
-    google_sub: str
-    display_name: str | None
-
-
-@dataclass(frozen=True)
-class ActiveLogin:
-    """만료되지 않은 로그인 상태 하나와 그 사용자.
-
-    allowed는 그 사용자의 이메일에 해당하는 허용 목록 행이며, 없으면 None이다.
+    돌려주는 레코드는 포트의 것(app/core/ports.py)이다(ADR-029).
     """
 
-    user: UserRecord
-    session_created_at: datetime
-    allowed: AllowedEmail | None
-
-
-class AuthRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
