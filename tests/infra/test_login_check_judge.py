@@ -473,6 +473,16 @@ class TestNoSecretsInOutput:
             text = repr(value)
             assert COOKIE_SHA256 not in text
 
+    def test_report_says_display_name_is_compared_by_person(self) -> None:
+        # 스크립트는 A의 Google 이름을 모르므로, display_name이 그 이름인지는 판정하지 못한다.
+        # 결과는 그 칸까지 판정한 것처럼 말하지 않고, 사람이 출력을 보고 대조하라고 알린다
+        # (3차 리뷰 BEH-2).
+        for report in (render_report([]), render_report(["[점검 1 · 로그인 후] users: 하나"])):
+            assert "display_name" in report
+            assert "Google 이름" in report
+            assert "사람이 대조한다" in report
+        assert "모든 시점의 상태가" not in render_report([])
+
     def test_render_report(self) -> None:
         assert "같다" in render_report([])
         report = render_report(
@@ -600,6 +610,21 @@ class TestSettings:
             "EMPTY": "",
         }
 
+    @pytest.mark.parametrize(
+        ("line", "value"),
+        [
+            # compose는 따옴표로 감싼 값의 닫는 따옴표 뒤를 버린다(3차 리뷰 COR-5).
+            ('FRONTEND_URL="http://localhost:5174" # dev', "http://localhost:5174"),
+            ("FRONTEND_URL='http://localhost:5174'   # 개발용", "http://localhost:5174"),
+            ('FRONTEND_URL="http://localhost:5174"', "http://localhost:5174"),
+            # 따옴표 안의 #은 주석이 아니다.
+            ('GOOGLE_CLIENT_ID="abc # def" # 주석', "abc # def"),
+        ],
+    )
+    def test_parse_dotenv_quoted_value_with_comment(self, line: str, value: str) -> None:
+        name = line.partition("=")[0]
+        assert parse_dotenv(line + "\n") == {name: value}
+
     def test_defaults_are_compose_defaults(self) -> None:
         settings = resolve_settings({}, {})
         assert settings == CheckSettings(
@@ -666,6 +691,23 @@ class TestSettings:
         assert result.returncode == 0, result.stderr
         assert "--allowed-email" in result.stdout
         assert "--denied-email" in result.stdout
+
+    def test_help_describes_the_check_of_adr_031(self, capsys: pytest.CaptureFixture[str]) -> None:
+        # README는 종료 코드의 뜻을 --help에서 보라고 한다. --help는 스크립트가 하는 일과 종료
+        # 코드의 뜻을 지금의 방식(ADR-031)대로 말해야 한다(3차 리뷰 BEH-1).
+        with pytest.raises(SystemExit) as exc:
+            parse_args(["--help"])
+        assert exc.value.code == 0
+        help_text = capsys.readouterr().out
+
+        assert "ADR-031" in help_text
+        assert "브라우저를 열거나 조종하지 않는다" in help_text
+        assert "게스트 창" in help_text
+        # 종료 코드 4는 안내한 요청이 지나가지 않았거나 데이터베이스에 닿지 못한 것이다(모듈
+        # 독스트링의 "종료 코드"). 브라우저가 닫히는 일은 이제 없다.
+        exit_4 = help_text.split("\n  4  ", 1)[1]
+        assert "대역 서버" in exit_4 and "데이터베이스" in exit_4
+        assert "브라우저가 닫혔다" not in help_text
 
 
 # --- 스크립트가 쓰지 않는 것 -----------------------------------------------------------------

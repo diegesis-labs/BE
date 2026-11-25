@@ -186,6 +186,10 @@ class TestRequestTarget:
             # 로그인 결과 처리의 쿼리에는 Google의 code와 state가 있으므로 담지 않는다.
             ("/api/auth/google/callback?code=CODE1&state=STATE2", "/api/auth/google/callback"),
             ("/api/me", "/api/me"),
+            # 대역 서버가 백엔드로 넘기는 것(`/api`로 시작하는 것)은 모두 쿼리를 담지 않는다. 넘기는
+            # 판정과 쿼리를 빼는 판정이 같아야 한다(3차 리뷰 SEC-1).
+            ("/api?code=CODE1&state=STATE2", "/api"),
+            ("/apix?code=CODE1&state=STATE2", "/apix"),
             # 화면의 주소는 쿼리까지 담는다. 점검 2는 /login?error=NOT_ALLOWED를 본다.
             ("/login?error=NOT_ALLOWED", "/login?error=NOT_ALLOWED"),
             ("/", "/"),
@@ -419,6 +423,35 @@ class TestBrowserWatch:
 
         assert watch.state(exchange()).url == f"{FRONTEND}/login?error=NOT_ALLOWED"
 
+    def test_forwarded_path_that_is_not_under_api_slash_is_not_a_page(self) -> None:
+        # `/apix`도 대역 서버가 백엔드로 넘기므로 대역의 화면이 아니다(3차 리뷰 SEC-1).
+        watch = BrowserWatch(FRONTEND)
+        watch.observe(exchange("/", navigation=True))
+        watch.observe(exchange("/apix", navigation=True, status=404))
+
+        assert watch.state(exchange()).url == f"{FRONTEND}/"
+
+    def test_request_that_is_neither_a_page_nor_api_is_not_compared(self) -> None:
+        # 대역 서버에는 게스트 창의 화면 이동과 /api 요청 말고도, 다른 창에 남은 탭이 보낸 요청(끈
+        # Vite의 재연결 요청 같은 것)이 온다. 그런 요청에는 평소 창의 쿠키가 붙어 있다. 표의
+        # 브라우저가 아니므로 쿠키를 대조하지 않는다(3차 리뷰 COR-4).
+        watch = BrowserWatch(FRONTEND)
+        for item in login_flow():
+            watch.observe(item)
+        assert watch.take_problems() == []
+
+        watch.observe(exchange("/", sent=f"{SESSION_COOKIE}={OTHER_TOKEN}; theme=dark"))
+        watch.observe(exchange("/favicon.ico", sent="theme=dark"))
+        assert watch.take_problems() == []
+
+        # 화면 이동과 /api 요청은 그대로 대조한다.
+        watch.observe(exchange("/", navigation=True, sent=f"{SESSION_COOKIE}={OTHER_TOKEN}"))
+        watch.observe(exchange("/api/me", sent=f"{SESSION_COOKIE}={TOKEN}; theme=dark"))
+        assert watch.take_problems() == [
+            CookieMismatch("different", SESSION_COOKIE, "GET /").text(),
+            CookieMismatch("unexpected", "theme", "GET /api/me").text(),
+        ]
+
     def test_problem_is_reported_once_per_cookie_until_taken(self) -> None:
         # 이전 점검의 쿠키가 남은 창에서 시작하면 요청마다 같은 쿠키가 붙는다.
         watch = BrowserWatch(FRONTEND)
@@ -462,6 +495,18 @@ class TestRenderSentCookies:
             denied_email="b@example.com",
         )
         assert "  보낸 쿠키(GET /api/me): 없음" in output.splitlines()
+
+    def test_api_address_is_shown_without_query(self) -> None:
+        # 백엔드로 넘기는 주소(`/api`로 시작하는 것)는 쿼리를 보여 주지 않는다(3차 리뷰 SEC-1).
+        db = DbState(allowed=(), users=(), sessions=(), session_total=0)
+        for url in (f"{FRONTEND}/api?code=SECRETCODE1", f"{FRONTEND}/apix?code=SECRETCODE1"):
+            output = render_snapshot(
+                "로그인 후",
+                Snapshot(db=db, browser=BrowserState(url=url, cookies=())),
+                allowed_email="a@example.com",
+                denied_email="b@example.com",
+            )
+            assert "SECRETCODE1" not in output
 
     def test_line_is_left_out_without_a_request(self) -> None:
         output = render_snapshot(

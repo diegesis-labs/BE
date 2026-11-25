@@ -27,9 +27,12 @@ from pathlib import Path
 import pytest
 
 from scripts.login_check import (
+    CALLBACK_PATH,
     LOGIN_PATH,
     LOGOUT_PATH,
     ME_PATH,
+    SESSION_COOKIE,
+    BrowserWatch,
     Exchange,
     FrontendStandIn,
     SentCookie,
@@ -425,6 +428,21 @@ class TestObservation:
         [recorded] = running.observed
         assert recorded.body is None
 
+    @pytest.mark.parametrize("path", ["/api", "/apix"])
+    def test_forwarded_request_is_recorded_without_query(self, running: Running, path: str) -> None:
+        # 대역 서버는 `/api`로 시작하는 요청을 모두 백엔드로 넘긴다. 넘기는 것은 모두 쿼리를
+        # 기록하지 않는다. 넘기는 판정과 쿼리를 빼는 판정이 다르면 그 틈으로 온 쿼리가 기록된다
+        # (3차 리뷰 SEC-1).
+        target = f"{path}?code=GAPCODE1&state=GAPSTATE2"
+
+        send(running.stand_in.port, "GET", target, [("Host", "localhost:5173")])
+
+        assert [r.target for r in running.backend.requests()] == [target]
+        [recorded] = running.observed
+        assert recorded.target == path
+        for secret in ("GAPCODE1", "GAPSTATE2"):
+            assert secret not in repr(recorded)
+
     def test_requests_are_recorded_in_order(self, running: Running) -> None:
         port = running.stand_in.port
         send(port, "GET", "/", [("Host", "localhost:5173"), ("Accept", "text/html")])
@@ -504,6 +522,97 @@ RECORD_CASES = {
         "GET", ME_PATH, [("Host", "localhost")], None, 502, backend_reachable=False
     ),
 }
+
+
+class TestRequestsSentTogether:
+    """브라우저가 함께 보낸 요청은 응답이 끝난 순서가 아니라 보낸 때의 쿠키로 대조된다(3차 리뷰
+    COR-2).
+
+    사람이 [로그아웃]을 겹쳐 누르면 같은 쿠키를 붙인 로그아웃 두 개가 함께 간다. 뒤에 보낸 것의
+    응답이 먼저 끝나 쿠키를 지워도, 앞에 보낸 것은 지우기 전에 보냈으므로 그 쿠키를 붙인 것이 맞다.
+    """
+
+    def test_two_logouts_sent_together_are_not_reported(self) -> None:
+        token = "sessionSentTogether9"
+        lock = threading.Lock()
+        observed: list[Exchange] = []
+        first_arrived = threading.Event()
+        later_recorded = threading.Event()
+        logouts: list[int] = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                self.send_response_only(302)
+                self.send_header("Location", "http://localhost:5173/")
+                self.send_header(
+                    "Set-Cookie", f"{SESSION_COOKIE}={token}; HttpOnly; SameSite=Lax; Path=/"
+                )
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def do_POST(self) -> None:
+                with lock:
+                    order = len(logouts)
+                    logouts.append(order)
+                if order == 0:
+                    # 먼저 온 로그아웃은, 뒤에 온 것이 끝나 기록된 다음에 응답한다.
+                    first_arrived.set()
+                    later_recorded.wait(5)
+                self.send_response_only(204)
+                self.send_header("Set-Cookie", f"{SESSION_COOKIE}=; Path=/; Max-Age=0")
+                self.end_headers()
+
+            def log_message(self, format: str, *args: object) -> None:
+                return
+
+        def observe(exchange: Exchange) -> None:
+            with lock:
+                observed.append(exchange)
+                recorded_logouts = [e for e in observed if e.target == LOGOUT_PATH]
+            if len(recorded_logouts) == 1:
+                later_recorded.set()
+
+        backend = ThreadingHTTPServer((LOOPBACK, 0), Handler)
+        backend_thread = threading.Thread(
+            target=backend.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
+        )
+        backend_thread.start()
+        stand_in = FrontendStandIn(
+            listen_host=LOOPBACK,
+            listen_port=0,
+            backend_url=f"http://{LOOPBACK}:{backend.server_port}",
+            observe=observe,
+        )
+        stand_in.start()
+        try:
+            port = stand_in.port
+            send(
+                port, "GET", CALLBACK_PATH, [("Host", "localhost"), ("Sec-Fetch-Dest", "document")]
+            )
+            logout = [("Host", "localhost"), ("Cookie", f"{SESSION_COOKIE}={token}")]
+            first = threading.Thread(target=send, args=(port, "POST", LOGOUT_PATH, logout))
+            first.start()
+            assert first_arrived.wait(5), "먼저 보낸 로그아웃이 백엔드에 닿지 않았다"
+            later = threading.Thread(target=send, args=(port, "POST", LOGOUT_PATH, logout))
+            later.start()
+            later.join(5)
+            first.join(5)
+        finally:
+            later_recorded.set()
+            stand_in.stop()
+            backend.shutdown()
+            backend.server_close()
+            backend_thread.join()
+
+        assert [(e.method, e.target) for e in observed] == [
+            ("GET", CALLBACK_PATH),
+            ("POST", LOGOUT_PATH),
+            ("POST", LOGOUT_PATH),
+        ]
+        watch = BrowserWatch("http://localhost:5173")
+        for exchange in observed:
+            watch.observe(exchange)
+        assert watch.take_problems() == []
 
 
 class TestRecordBeforeResponse:

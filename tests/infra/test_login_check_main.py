@@ -369,7 +369,7 @@ class TestResultOfChecks:
         assert fakes.run_calls == [(SETTINGS, Args(allowed_email=A, denied_email=B))]
         assert_all_checks_ran(fakes)
         assert f"FRONTEND_URL={FRONTEND}, 백엔드={BACKEND}, 데이터베이스=localhost:{DB_PORT}" in out
-        assert "=== 결과\n모든 시점의 상태가 testcase.md의 표와 같다." in out
+        assert "=== 결과\n스크립트가 판정하는 칸은 모든 시점에서 testcase.md의 표와 같다." in out
         assert err == ""
 
     def test_aborted_exits_4(self, fakes: Fakes, capsys: pytest.CaptureFixture[str]) -> None:

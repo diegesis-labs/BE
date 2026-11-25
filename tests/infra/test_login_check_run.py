@@ -415,8 +415,10 @@ class FakeWorld:
         elif step == STEP_ME:
             self._request("GET", ME_PATH, navigation=False)
         elif step == STEP_LOG_OUT:
-            self._request("POST", LOGOUT_PATH, navigation=False)
-            self._request("GET", ME_PATH, navigation=False)
+            # 사람이 [로그아웃]을 두 번 누르면, 화면은 로그아웃과 내 정보 확인을 두 번 보낸다.
+            for _ in range(2 if "double_logout_click" in self.faults else 1):
+                self._request("POST", LOGOUT_PATH, navigation=False)
+                self._request("GET", ME_PATH, navigation=False)
         else:
             raise AssertionError(f"모르는 안내: {step}")
 
@@ -593,6 +595,19 @@ class TestStepsOfChecks:
         assert A in log_ins[0] and B not in log_ins[0]
         assert B in log_ins[1] and A not in log_ins[1]
 
+    async def test_requests_left_from_the_first_window_are_not_used_by_the_second_check(
+        self, world: FakeWorld
+    ) -> None:
+        # 사람이 점검 1의 창에서 [로그아웃]을 두 번 누르면, 두 번째 로그아웃과 내 정보 확인은
+        # 점검 1이 끝난 뒤에 남는다. 점검 2는 새 게스트 창에서 시작하므로, 그 요청을 점검 2의
+        # "로그인 전"으로 쓰면 새 창을 열기도 전에 판정하고 다음 안내로 넘어간다(3차 리뷰 COR-1).
+        world.faults = {"double_logout_click"}
+
+        mismatches = await run_checks(SETTINGS, ARGS)
+
+        assert world.log == EXPECTED_LOG
+        assert mismatches == []
+
     def test_exchange_that_arrives_after_the_checks_is_ignored(self, world: FakeWorld) -> None:
         # 점검이 끝나 이벤트 루프가 닫힌 뒤에 사람이 버튼을 눌러도, 대역 서버의 스레드에서 예외가
         # 나지 않는다. 루프가 닫힌 뒤에 부르려고 asyncio.run으로 돌린다(3차 리뷰 TST-3).
@@ -719,6 +734,47 @@ class TestAbortedChecks:
 
         assert 0 < world.noise_sent < world.noise
 
+    @pytest.mark.parametrize(
+        ("fault", "read_error_at", "found"),
+        [
+            # 앞 시점의 판정에서 나온 어긋남.
+            ("session_cookie_secure", 2, [FAULTS["session_cookie_secure"]]),
+            # 끝내지 못한 시점에서 이미 본 쿠키의 대조 결과. 스냅숏에 찍히지 않으므로 여기서 버리면
+            # 다시 볼 길이 없다.
+            (
+                "browser_drops_session",
+                1,
+                [f"[점검 1 · 로그인 후] {cookie_text('missing', SESSION_COOKIE, 'GET /')}"],
+            ),
+        ],
+    )
+    async def test_mismatches_found_before_the_abort_are_kept(
+        self, world: FakeWorld, fault: str, read_error_at: int, found: list[str]
+    ) -> None:
+        # 점검이 중간에 4로 끝나도 그때까지 모은 어긋남을 버리지 않는다(3차 리뷰 COR-3).
+        world.faults = {fault}
+        world.read_error = ConnectionRefusedError(61, "Connection refused")
+        world.read_error_at = read_error_at
+
+        with pytest.raises(CheckAbortedError) as raised:
+            await run_checks(SETTINGS, ARGS)
+
+        assert len(raised.value.found) == len(found), raised.value.found
+        for kept, expected in zip(raised.value.found, found, strict=True):
+            assert kept.startswith(expected), kept
+
+    async def test_mismatches_found_before_the_timeout_are_kept(
+        self, world: FakeWorld, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(login_check, "LOGIN_WAIT_SECONDS", 0.05)
+        world.faults = {"stale_cookie_in_browser"}
+        world.idle_step = STEP_LOG_IN
+
+        with pytest.raises(CheckAbortedError) as raised:
+            await run_checks(SETTINGS, ARGS)
+
+        assert list(raised.value.found) == WIRED["stale_cookie_in_browser"][:1]
+
     async def test_stand_in_port_failure_is_aborted_before_asking(self, world: FakeWorld) -> None:
         world.stand_in_error = OSError(48, "Address already in use")
 
@@ -758,7 +814,7 @@ class TestExitCodeWithRealLayer:
 
         out, err = capsys.readouterr()
         assert code == 0, err
-        assert "=== 결과\n모든 시점의 상태가 testcase.md의 표와 같다." in out
+        assert "=== 결과\n스크립트가 판정하는 칸은 모든 시점에서 testcase.md의 표와 같다." in out
 
     def test_mismatch_exits_1_and_reports_it(
         self, world: FakeWorld, capsys: pytest.CaptureFixture[str]
@@ -786,6 +842,23 @@ class TestExitCodeWithRealLayer:
             "점검을 끝내지 못했다. 점검 중에 개발용 데이터베이스를 읽지 못했다: "
             "ConnectionRefusedError"
         ) in err
+        assert "=== 결과" not in out
+
+    def test_abort_shows_the_mismatches_found_before_it(
+        self, world: FakeWorld, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # 점검을 끝내지 못해도 그때까지 표와 다른 것을 보여 준 뒤 4로 끝난다(3차 리뷰 COR-3).
+        world.faults = {"browser_drops_session"}
+        world.read_error = ConnectionRefusedError(61, "Connection refused")
+        world.read_error_at = 1
+
+        code = main(ARGV)
+
+        out, err = capsys.readouterr()
+        assert code == 4
+        assert "점검을 끝내지 못했다." in err
+        expected = f"[점검 1 · 로그인 후] {cookie_text('missing', SESSION_COOKIE, 'GET /')}"
+        assert f"- {expected}" in out
         assert "=== 결과" not in out
 
 
