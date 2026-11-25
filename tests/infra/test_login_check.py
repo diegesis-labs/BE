@@ -454,6 +454,20 @@ class TestObservation:
         ]
         assert header("diegesis_session", running.observed[1]) == ["diegesis_session"]
 
+    def test_tick_is_after_requests_received_before_it(self, running: Running) -> None:
+        # 점검 2는 시작할 때 받아 둔 순번보다 먼저 받은 요청(점검 1의 창이 보낸 것)을 보지 않는다
+        # (4차 리뷰 COR-2). 그래서 그 순번은 앞서 받은 요청의 순번보다 크고, 뒤에 받은 요청의
+        # 순번보다 작다.
+        port = running.stand_in.port
+        send(port, "GET", "/", [("Host", "localhost:5173")])
+        mark = running.stand_in.tick()
+        send(port, "GET", "/", [("Host", "localhost:5173")])
+
+        before, after = running.observed
+        assert before.received is not None and before.recorded is not None
+        assert after.received is not None and after.recorded is not None
+        assert before.received < before.recorded < mark < after.received < after.recorded
+
     def test_backend_unreachable_is_recorded_as_502(self) -> None:
         with socket.socket() as probe:
             probe.bind((LOOPBACK, 0))

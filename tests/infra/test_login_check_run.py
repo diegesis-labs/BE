@@ -31,6 +31,8 @@ test_login_check_observe.py가, `main`이 종료 코드를 고르는 것은 test
 - 고장은 표의 칸(테이블, 쿠키, 상태 코드, 주소)마다, 그리고 쿠키를 대조하는 여섯 시점마다 하나 이상
   있다. 쿠키의 대조는 스냅숏에 찍히지 않으므로, 층이 시점마다 대조의 결과를 모으지 않으면 고장이
   보고되지 않는다.
+- 가짜 대역 서버도 진짜처럼 요청을 받을 때와 기록할 때 순번을 매긴다. 그래서 점검 1의 창이 보낸
+  요청이 점검 2가 시작한 뒤에 기록되는 경우를 만들 수 있다.
 
 `TestWithRealStandIn`은 가짜 대역 서버 대신 진짜 `FrontendStandIn`을 띄우고, 가짜의 서버를 HTTP로
 띄운 백엔드를 그 뒤에 둔다. 사람은 별도 스레드에서 진짜 HTTP 요청을 보낸다. 대역 서버의 스레드에서
@@ -39,6 +41,7 @@ test_login_check_observe.py가, `main`이 종료 코드를 고르는 것은 test
 
 import asyncio
 import http.client
+import itertools
 import json
 import socket
 import threading
@@ -222,9 +225,10 @@ WIRED = {
         f"[점검 1 · 로그아웃 후] {cookie_text('missing', SESSION_COOKIE, f'POST {LOGOUT_PATH}')}",
     ],
     # 브라우저가 로그아웃의 지우는 Set-Cookie를 무시하고, 지운 쿠키를 다음 요청에 다시 붙인다.
-    # 테이블과 Set-Cookie의 셈은 표와 같으므로 쿠키의 대조로만 드러난다.
+    # 테이블과 Set-Cookie의 셈은 표와 같으므로 쿠키의 대조로만 드러난다. 이번 점검에서 심은
+    # 쿠키이므로 "심지 않은 쿠키"가 아니라 "지운 쿠키"로 보고된다(4차 리뷰 BEH-1).
     "browser_keeps_deleted_session": [
-        f"[점검 1 · 로그아웃 후] {cookie_text('unexpected', SESSION_COOKIE, f'GET {ME_PATH}')}",
+        f"[점검 1 · 로그아웃 후] {cookie_text('kept', SESSION_COOKIE, f'GET {ME_PATH}')}",
     ],
     # 점검 2의 새 창에 앞 창의 쿠키가 남아 있다.
     "stale_cookie_in_denied_window": [
@@ -254,6 +258,20 @@ WIRED = {
         f"[점검 1 · 로그아웃 후] 브라우저: GET {ME_PATH}가 401가 아니다(지금: 200).",
     ],
 }
+
+
+# 사람이 점검 1의 창에서 누른 것이 점검 2가 시작한 뒤에 대역 서버를 지나는 경우.
+CROSSING = [
+    # [로그아웃]을 사람의 간격으로 두 번 누른다. 두 번째 누름(쿠키가 이미 지워진 로그아웃과 내 정보
+    # 확인)은 점검 2가 기다리기 시작한 뒤에 오고, 사람은 그다음에 새 게스트 창을 연다. 그 내 정보
+    # 확인을 점검 2의 "로그인 전"으로 쓰면, 새 창을 열기도 전에 다음 안내로 넘어간다
+    # (4차 리뷰 COR-1).
+    "late_second_logout_click",
+    # [로그아웃]을 겹쳐 눌러 둘 다 로그인 상태의 쿠키를 붙여 간다. 먼저 보낸 것은 백엔드에서 늦게
+    # 끝나, 점검 2가 시작한 뒤에 기록된다. 그 요청을 점검 2의 빈 셈과 견주면 "심지 않은 쿠키"로
+    # 거짓 보고된다(4차 리뷰 COR-2).
+    "logouts_cross_the_checks",
+]
 
 
 def _raw_cookie(header: str) -> tuple[str, str, str, bool]:
@@ -311,6 +329,9 @@ class FakeStandIn:
     def stop(self) -> None:
         self.world.stand_in_events.append("stop")
 
+    def tick(self) -> int:
+        return self.world.tick()
+
 
 @dataclass(frozen=True)
 class Response:
@@ -323,13 +344,17 @@ class Response:
 class FakeWorld:
     """안내대로 따라 하는 사람과, 표대로 움직이는 브라우저, 서버, 데이터베이스.
 
-    faults에 FAULTS나 WIRED의 이름을 넣으면 그 자리에서만 표와 다르게 움직인다. idle_step에 안내의
-    이름을 넣으면 사람이 그 안내를 따르지 않는다. 그때 noise에 수를 넣으면, 사람이 연 화면이 그
-    수만큼 NOISE_INTERVAL마다 기다리는 것과 상관없는 요청을 보낸다. *_error에 예외를 넣으면 그
+    faults에 FAULTS나 WIRED의 이름을 넣으면 그 자리에서만 표와 다르게 움직인다. CROSSING의 이름을
+    넣으면 사람이 점검 1의 창에서 누른 것이 점검 2가 시작한 뒤에 대역 서버를 지난다. idle_step에
+    안내의 이름을 넣으면 사람이 그 안내를 따르지 않는다. 그때 noise에 수를 넣으면, 사람이 연 화면이
+    그 수만큼 NOISE_INTERVAL마다 기다리는 것과 상관없는 요청을 보낸다. *_error에 예외를 넣으면 그
     자리에서 낸다.
     """
 
     NOISE_INTERVAL = 0.1
+    # 사람이 새 게스트 창을 열기까지 걸리는 실제 시간(초). 그사이 점검 1의 창에서 누른 것이 먼저
+    # 대역 서버를 지난다.
+    NEW_WINDOW_DELAY = 0.05
 
     def __init__(self, *, frontend: str = FRONTEND) -> None:
         self.frontend = frontend
@@ -357,10 +382,16 @@ class FakeWorld:
         self.stand_in_events: list[str] = []
         self._pending: asyncio.Handle | None = None
         self._noise: asyncio.TimerHandle | None = None
+        self._ticks = itertools.count(1)
+        self._held_logout: Callable[[], Response] | None = None
 
     def _clock(self) -> datetime:
         """서버가 행을 만드는 시각과 대역 서버가 기록하는 시각."""
         return self.now
+
+    def tick(self) -> int:
+        """가짜 대역 서버의 순번. 진짜처럼 요청을 받을 때와 기록할 때 하나씩 매긴다."""
+        return next(self._ticks)
 
     # --- 데이터베이스 -------------------------------------------------------------------------
 
@@ -392,7 +423,17 @@ class FakeWorld:
         self.messages.append(message)
         if self._pending is not None:
             self._pending.cancel()
-        self._pending = asyncio.get_running_loop().call_soon(self._act, step)
+        loop = asyncio.get_running_loop()
+        if step == STEP_REOPEN and "late_second_logout_click" in self.faults:
+            # 사람이 점검 1의 창에서 [로그아웃]을 한 번 더 누른 것이, 점검 2가 기다리기 시작한 뒤에
+            # 대역 서버를 지난다. 새 게스트 창은 그다음에 연다.
+            loop.call_soon(self._click_logout)
+            self._pending = loop.call_later(self.NEW_WINDOW_DELAY, self._act, step)
+            return
+        if step == STEP_REOPEN and self._held_logout is not None:
+            # 점검 1에서 먼저 보낸 로그아웃이 점검 2가 시작한 뒤에야 끝나 기록된다.
+            loop.call_soon(self._finish_held_logout)
+        self._pending = loop.call_soon(self._act, step)
 
     def _act(self, step: str) -> None:
         self._pending = None
@@ -415,12 +456,26 @@ class FakeWorld:
         elif step == STEP_ME:
             self._request("GET", ME_PATH, navigation=False)
         elif step == STEP_LOG_OUT:
+            if "logouts_cross_the_checks" in self.faults:
+                # 사람이 [로그아웃]을 겹쳐 누른다. 두 로그아웃 모두 로그인 상태의 쿠키를 붙여 간다.
+                # 먼저 보낸 것은 백엔드에서 늦게 끝난다.
+                self._held_logout = self._send("POST", LOGOUT_PATH, navigation=False)
             # 사람이 [로그아웃]을 두 번 누르면, 화면은 로그아웃과 내 정보 확인을 두 번 보낸다.
             for _ in range(2 if "double_logout_click" in self.faults else 1):
-                self._request("POST", LOGOUT_PATH, navigation=False)
-                self._request("GET", ME_PATH, navigation=False)
+                self._click_logout()
         else:
             raise AssertionError(f"모르는 안내: {step}")
+
+    def _click_logout(self) -> None:
+        """지금의 창에서 [로그아웃]을 누른다. 화면은 로그아웃한 뒤 내 정보를 한 번 더 확인한다."""
+        self._request("POST", LOGOUT_PATH, navigation=False)
+        self._request("GET", ME_PATH, navigation=False)
+
+    def _finish_held_logout(self) -> None:
+        assert self._held_logout is not None
+        finish, self._held_logout = self._held_logout, None
+        finish()
+        self._request("GET", ME_PATH, navigation=False)
 
     def _new_window(self, step: str) -> FakeGuestWindow:
         refuses: set[str] = set()
@@ -455,25 +510,41 @@ class FakeWorld:
             self._navigate(response.location.removeprefix(self.frontend))
 
     def _request(self, method: str, target: str, *, navigation: bool) -> Response:
+        return self._send(method, target, navigation=navigation)()
+
+    def _send(self, method: str, target: str, *, navigation: bool) -> Callable[[], Response]:
+        """지금의 창이 요청을 보내고 대역 서버가 받는다. 돌려준 함수를 부르면 서버가 응답하고,
+        대역 서버가 기록하고, 그 창이 응답의 Set-Cookie를 받는다."""
         self.now += HOP
+        window = self.window
         path = urlsplit(target).path
-        cookies = self.window.cookies_for(path)
-        response = self._serve(method, path, cookies) if path.startswith("/api/") else Response(200)
-        self.window.receive(list(response.set_cookies))
-        assert self.observe is not None, "대역 서버가 뜨기 전에 요청했다"
-        self.observe(
-            Exchange(
-                at=self.now,
-                method=method,
-                target=request_target(target),
-                navigation=navigation,
-                sent=tuple(SentCookie(name, sha256_hex(value)) for name, value in cookies.items()),
-                status=response.status,
-                set_cookies=tuple(parse_set_cookie(header) for header in response.set_cookies),
-                body=response.body,
+        cookies = window.cookies_for(path)
+        received = self.tick()
+
+        def respond() -> Response:
+            api = path.startswith("/api/")
+            response = self._serve(method, path, cookies) if api else Response(200)
+            window.receive(list(response.set_cookies))
+            assert self.observe is not None, "대역 서버가 뜨기 전에 요청했다"
+            self.observe(
+                Exchange(
+                    at=self.now,
+                    method=method,
+                    target=request_target(target),
+                    navigation=navigation,
+                    sent=tuple(
+                        SentCookie(name, sha256_hex(value)) for name, value in cookies.items()
+                    ),
+                    status=response.status,
+                    set_cookies=tuple(parse_set_cookie(header) for header in response.set_cookies),
+                    body=response.body,
+                    received=received,
+                    recorded=self.tick(),
+                )
             )
-        )
-        return response
+            return response
+
+        return respond
 
     # --- 서버 ---------------------------------------------------------------------------------
 
@@ -606,6 +677,19 @@ class TestStepsOfChecks:
         # 점검 1이 끝난 뒤에 남는다. 점검 2는 새 게스트 창에서 시작하므로, 그 요청을 점검 2의
         # "로그인 전"으로 쓰면 새 창을 열기도 전에 판정하고 다음 안내로 넘어간다(3차 리뷰 COR-1).
         world.faults = {"double_logout_click"}
+
+        mismatches = await run_checks(SETTINGS, ARGS)
+
+        assert world.log == EXPECTED_LOG
+        assert mismatches == []
+
+    @pytest.mark.parametrize("fault", CROSSING)
+    async def test_requests_of_the_first_window_after_the_second_check_starts_are_not_its(
+        self, world: FakeWorld, fault: str
+    ) -> None:
+        # 점검 1의 창이 보낸 요청이 점검 2가 시작한 뒤에 대역 서버를 지난다. 점검 2는 그 요청으로
+        # 새 창을 판정하지 않고, 새 창의 쿠키와 견주지도 않는다(4차 리뷰 COR-1, COR-2).
+        world.faults = {fault}
 
         mismatches = await run_checks(SETTINGS, ARGS)
 

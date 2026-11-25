@@ -322,6 +322,59 @@ class TestCookieJar:
             CookieMismatch("different", SESSION_COOKIE, "GET /")
         ]
 
+    def test_cookie_deleted_during_this_check_and_sent_again(self) -> None:
+        # 브라우저가 지우는 Set-Cookie를 받아들이지 않으면, 지운 쿠키를 다음 요청에 그대로 붙인다.
+        # 이번 점검에서 심은 쿠키이므로 "심지 않은 쿠키"가 아니다. 새 게스트 창에서 다시 해도 같은
+        # 결과가 나오므로, 사람을 새 창 확인으로 보내면 원인을 찾지 못한다(4차 리뷰 BEH-1).
+        jar = CookieJar()
+        jar.apply(exchange("/api/auth/google/callback", status=302, set_cookies=(SESSION_SET,)))
+        jar.apply(
+            exchange("/api/auth/logout", method="POST", status=204, set_cookies=(SESSION_DELETE,))
+        )
+
+        assert jar.compare(exchange("/api/me", sent=f"{SESSION_COOKIE}={TOKEN}")) == [
+            CookieMismatch("kept", SESSION_COOKIE, "GET /api/me")
+        ]
+        # 지운 것과 값이 다른 쿠키는 이번 점검에서 심지 않은 쿠키다.
+        assert jar.compare(exchange("/api/me", sent=f"{SESSION_COOKIE}={OTHER_TOKEN}")) == [
+            CookieMismatch("unexpected", SESSION_COOKIE, "GET /api/me")
+        ]
+
+    def test_deleted_cookie_is_kept_only_on_requests_its_path_matches(self) -> None:
+        # 지운 쿠키의 경로가 맞지 않는 요청에 같은 이름이 붙었으면, 브라우저가 지운 쿠키가 아니다.
+        jar = CookieJar()
+        jar.apply(exchange("/api/auth/google/login", status=302, set_cookies=(STATE_SET,)))
+        jar.apply(exchange("/api/auth/google/callback", status=302, set_cookies=(STATE_DELETE,)))
+
+        sent = f"{STATE_COOKIE}={STATE}"
+        assert jar.compare(exchange("/api/auth/google/callback", sent=sent)) == [
+            CookieMismatch("kept", STATE_COOKIE, "GET /api/auth/google/callback")
+        ]
+        assert jar.compare(exchange("/api/me", sent=sent)) == [
+            CookieMismatch("unexpected", STATE_COOKIE, "GET /api/me")
+        ]
+
+    def test_cookie_set_again_after_deleting_is_held(self) -> None:
+        jar = CookieJar()
+        jar.apply(exchange(set_cookies=(SESSION_SET,)))
+        jar.apply(exchange(set_cookies=(SESSION_DELETE,)))
+        jar.apply(exchange(set_cookies=(SESSION_SET.replace(TOKEN, OTHER_TOKEN),)))
+
+        assert jar.compare(exchange("/", sent=f"{SESSION_COOKIE}={OTHER_TOKEN}")) == []
+        assert jar.compare(exchange("/", sent=f"{SESSION_COOKIE}={TOKEN}")) == [
+            CookieMismatch("different", SESSION_COOKIE, "GET /")
+        ]
+
+    def test_copy_remembers_deleted_cookies(self) -> None:
+        # BrowserWatch는 요청을 보낸 때의 셈(복사본)과 견준다. 복사본도 지운 쿠키를 기억해야 한다.
+        jar = CookieJar()
+        jar.apply(exchange(set_cookies=(SESSION_SET,)))
+        jar.apply(exchange(set_cookies=(SESSION_DELETE,)))
+
+        assert jar.copy().compare(exchange("/api/me", sent=f"{SESSION_COOKIE}={TOKEN}")) == [
+            CookieMismatch("kept", SESSION_COOKIE, "GET /api/me")
+        ]
+
     def test_only_cookies_whose_path_matches_are_expected(self) -> None:
         jar = CookieJar()
         jar.apply(exchange("/api/auth/google/login", set_cookies=(STATE_SET,)))
@@ -335,10 +388,19 @@ class TestCookieJar:
         )
 
     def test_mismatch_text_names_request_and_cookie_but_no_value(self) -> None:
-        for kind in ("missing", "unexpected", "different"):
+        for kind in ("missing", "unexpected", "different", "kept"):
             text = CookieMismatch(kind, SESSION_COOKIE, "GET /api/me").text()
             assert text.startswith("브라우저: ")
             assert "GET /api/me" in text and SESSION_COOKIE in text
+
+    def test_kept_cookie_points_to_the_deleting_set_cookie(self) -> None:
+        # 지운 쿠키를 다시 붙인 원인은 새 창이 아니라 브라우저가 받아들이지 않은 지우는 Set-Cookie다
+        # (4차 리뷰 BEH-1).
+        text = CookieMismatch("kept", SESSION_COOKIE, "GET /api/me").text()
+        assert "이번 점검에서 지운" in text
+        assert "지우는 Set-Cookie" in text
+        assert "속성" in text
+        assert "새 게스트 창" not in text
 
 
 # --- 한 점검 동안의 브라우저 ------------------------------------------------------------------
