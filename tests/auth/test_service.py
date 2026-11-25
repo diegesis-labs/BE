@@ -26,7 +26,7 @@ from app.auth.repository import UserRecord
 from app.auth.service import AuthService, LoginRejected, LoginResult, LoginSucceeded
 from app.core import security
 from app.core.ports import LoginFailedError
-from tests.auth.fakes import (
+from tests.support.auth_fakes import (
     READER_IDENTITY,
     AuthorizationUrlCall,
     ExchangeCodeCall,

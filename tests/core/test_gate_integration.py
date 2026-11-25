@@ -26,7 +26,7 @@ from sqlalchemy import text
 
 from app.core import security
 from app.core.database import create_engine
-from tests.core.gated_app import ADMIN_ROUTE, USER_ROUTE, create_gated_app
+from tests.support.gated_app import ADMIN_ROUTE, USER_ROUTE, create_gated_app
 
 pytestmark = pytest.mark.integration
 

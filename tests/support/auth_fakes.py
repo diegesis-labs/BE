@@ -4,7 +4,8 @@
 - FakeAuthStore: AuthStore(app/auth/service.py)를 만족하는 메모리 저장소. 데이터베이스에 닿지
   않는다. 관문(app/core/gate.py)이 쓰는 find_active_login도 가진다.
 
-service, 관문, 라우터의 단위 테스트가 이 가짜를 쓴다.
+service, 관문, 라우터의 테스트가 이 가짜를 쓴다. 가짜가 지키는 약속은
+tests/support/test_auth_fakes.py가 본다.
 """
 
 from collections.abc import Callable

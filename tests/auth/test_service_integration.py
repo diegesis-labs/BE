@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from app.auth.repository import AuthRepository
 from app.auth.service import AuthService, LoginRejected, LoginResult, LoginSucceeded
 from app.core.ports import Identity
-from tests.auth.fakes import READER_IDENTITY, FakeIdentityProvider
+from tests.support.auth_fakes import READER_IDENTITY, FakeIdentityProvider
 
 pytestmark = pytest.mark.integration
 

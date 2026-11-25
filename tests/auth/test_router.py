@@ -41,7 +41,7 @@ from app.core import security
 from app.core.config import get_settings
 from app.core.ports import LoginFailedError
 from app.main import create_app
-from tests.auth.fakes import (
+from tests.support.auth_fakes import (
     READER_IDENTITY,
     AuthorizationUrlCall,
     ExchangeCodeCall,

@@ -39,7 +39,7 @@ from app.auth.router import get_identity_provider
 from app.core.database import DbSession, create_engine
 from app.core.ports import Identity
 from app.main import create_app
-from tests.auth.fakes import READER_IDENTITY, FakeIdentityProvider
+from tests.support.auth_fakes import READER_IDENTITY, FakeIdentityProvider
 from tests.support.settings import TEST_FRONTEND_URL
 
 pytestmark = pytest.mark.integration

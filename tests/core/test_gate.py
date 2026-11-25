@@ -4,8 +4,9 @@ docs/backlog/epic-1/testcase.md의 S1.4 가운데 데이터베이스 없이 확�
 데이터베이스의 변화(만료, SQL로 바꾼 허용 목록과 역할, 행을 바꾸지 않음)는
 tests/core/test_gate_integration.py가 확인한다.
 
-저장소는 app.dependency_overrides[get_auth_repository]로 FakeAuthStore(tests/auth/fakes.py)를
-끼운다. FakeAuthStore는 받은 해시를 lookups에, 쓰기를 writes에 남긴다.
+저장소는 app.dependency_overrides[get_auth_repository]로
+FakeAuthStore(tests/support/auth_fakes.py)를 끼운다. FakeAuthStore는 받은 해시를 lookups에, 쓰기를
+writes에 남긴다.
 """
 
 import logging
@@ -19,8 +20,8 @@ from fastapi.testclient import TestClient
 from app.auth.repository import UserRecord, get_auth_repository
 from app.core.config import get_settings
 from app.core.security import hash_token
-from tests.auth.fakes import FakeAuthStore
-from tests.core.gated_app import ADMIN_ROUTE, USER_ROUTE, create_gated_app
+from tests.support.auth_fakes import FakeAuthStore
+from tests.support.gated_app import ADMIN_ROUTE, USER_ROUTE, create_gated_app
 
 pytestmark = pytest.mark.usefixtures("app_env")
 
