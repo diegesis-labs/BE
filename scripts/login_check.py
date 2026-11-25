@@ -68,18 +68,30 @@ compose로 서버를 띄우고, 허용 목록에 계정 A를 `user`로 넣은 �
 그대로(같은 이름이 여러 번 와도 따로따로) 돌려준다.
 """
 
+import argparse
+import asyncio
+import hashlib
 import html
 import http.client
+import json
+import os
+import socket
+import sys
 import threading
 import uuid
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Self
-from urllib.parse import urlsplit
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Self
+from urllib.parse import parse_qs, urlsplit
 
 import asyncpg
+
+if TYPE_CHECKING:
+    # 타입 확인에만 쓴다. Playwright는 브라우저를 모는 층이 부를 때에만 불러온다.
+    from playwright.async_api import Browser, BrowserContext, Page
 
 # 이 접두사로 시작하는 경로를 백엔드로 넘긴다. 프론트엔드의 개발 서버의 proxy 설정과 같은 꼴이다.
 API_PREFIX = "/api"
@@ -301,19 +313,27 @@ LOGIN_SESSION_TTL = timedelta(hours=336)
 TIME_TOLERANCE = timedelta(minutes=1)
 # 사람이 Google 화면에서 계정을 고를 때까지 기다리는 시간의 상한.
 LOGIN_WAIT_SECONDS = 300
+# 브라우저를 열기 전에 백엔드를 부를 때 기다리는 시간.
+PREFLIGHT_TIMEOUT_SECONDS = 5
 
 # compose.yaml의 기본값과 db 서비스의 로컬 전용 계정.
 DEFAULT_FRONTEND_URL = "http://localhost:5173"
 DEFAULT_API_PORT = 8080
 DEFAULT_DB_PORT = 5432
-DB_USER_AND_PASSWORD = "diegesis:diegesis"
+DB_LOGIN = "diegesis:diegesis"
 DB_NAME = "diegesis"
 LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1"})
+
+# compose가 `${...}`를 채우려고 읽는 파일. compose.yaml과 같은 폴더(레포 최상위)에 있다.
+DOTENV_PATH = Path(__file__).resolve().parents[1] / ".env"
 
 EXIT_OK = 0
 EXIT_MISMATCH = 1
 EXIT_PREFLIGHT = 3
 EXIT_ABORTED = 4
+
+COMPOSE_UP = "docker compose up --build -d --wait"
+PSQL = "docker compose exec db psql -U diegesis -d diegesis"
 
 
 # --- 설정과 인자 ---------------------------------------------------------------------------
@@ -341,17 +361,77 @@ class CheckSettings:
 
     @property
     def database_url(self) -> str:
-        return f"postgresql://{DB_USER_AND_PASSWORD}@localhost:{self.db_port}/{DB_NAME}"
+        return f"postgresql://{DB_LOGIN}@localhost:{self.db_port}/{DB_NAME}"
 
 
 def parse_dotenv(text: str) -> dict[str, str]:
-    """`.env`의 `이름=값` 줄을 읽는다. 빈 줄과 `#`으로 시작하는 줄은 건너뛴다."""
-    raise NotImplementedError
+    """`.env`의 `이름=값` 줄을 읽는다. 빈 줄과 `#`으로 시작하는 줄은 건너뛴다.
+
+    값을 따옴표로 감쌌으면 따옴표를 벗기고, 감싸지 않았으면 ` #` 뒤의 줄 끝 주석을 뺀다.
+    """
+    values: dict[str, str] = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line.removeprefix("export ").lstrip()
+        name, sep, value = line.partition("=")
+        name, value = name.strip(), value.strip()
+        if not sep or not name:
+            continue
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+            value = value[1:-1]
+        else:
+            value = value.split(" #", 1)[0].rstrip()
+        values[name] = value
+    return values
+
+
+def _compose_value(
+    name: str, environ: Mapping[str, str], dotenv: Mapping[str, str], default: str
+) -> str:
+    # compose는 셸의 환경변수를 `.env`보다 먼저 보고, `${이름:-기본값}`은 비어 있는 값도
+    # 기본값으로 바꾼다.
+    value = environ[name] if name in environ else dotenv.get(name, "")
+    return value or default
+
+
+def _port(name: str, value: str) -> int:
+    if not value.isdigit() or not 0 < int(value) < 65536:
+        raise ValueError(f"{name}는 1부터 65535까지의 포트 번호여야 한다: {value!r}")
+    return int(value)
 
 
 def resolve_settings(environ: Mapping[str, str], dotenv: Mapping[str, str]) -> CheckSettings:
-    """compose의 `${이름:-기본값}`과 같은 방법으로 세 값을 정한다. 값이 잘못됐으면 ValueError."""
-    raise NotImplementedError
+    """compose의 `${이름:-기본값}`과 같은 방법으로 세 값을 정한다. 값이 잘못됐으면 ValueError.
+
+    `FRONTEND_URL`은 대역 서버가 이 컴퓨터에서 받을 주소이므로 `http://localhost:포트`나
+    `http://127.0.0.1:포트` 꼴이어야 한다.
+    """
+    frontend_url = _compose_value("FRONTEND_URL", environ, dotenv, DEFAULT_FRONTEND_URL)
+    parts = urlsplit(frontend_url)
+    try:
+        _ = parts.port
+    except ValueError as error:
+        raise ValueError(f"FRONTEND_URL의 포트를 읽지 못했다: {frontend_url!r}") from error
+    if (
+        parts.scheme != "http"
+        or parts.hostname not in LOCAL_HOSTS
+        or parts.username is not None
+        or parts.path
+        or parts.query
+        or parts.fragment
+    ):
+        raise ValueError(
+            "로컬 점검의 FRONTEND_URL은 http://localhost:포트나 http://127.0.0.1:포트 꼴이어야 "
+            f"한다: {frontend_url!r}"
+        )
+    return CheckSettings(
+        frontend_url=frontend_url,
+        api_port=_port("API_PORT", _compose_value("API_PORT", environ, dotenv, "8080")),
+        db_port=_port("DB_PORT", _compose_value("DB_PORT", environ, dotenv, "5432")),
+    )
 
 
 @dataclass(frozen=True)
@@ -360,9 +440,54 @@ class Args:
     denied_email: str
 
 
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="login_check.py",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "실제 Google 계정 두 개로 로컬의 로그인과 로그아웃을 점검한다(ADR-026).\n"
+            "compose로 띄운 서버 앞에 프론트엔드 대역 서버를 띄우고, 화면이 보이는 브라우저를\n"
+            "연다. "
+            "사람은 브라우저의 Google 화면에서 안내받은 계정을 고르기만 한다.\n"
+            "시점마다 세 테이블과 브라우저의 상태를 출력하고, testcase.md의 표와 대조한다."
+        ),
+        epilog=(
+            "FRONTEND_URL, API_PORT, DB_PORT는 환경변수, 레포 최상위의 .env, compose의 기본값의\n"
+            "순서로 정한다.\n\n"
+            "종료 코드:\n"
+            "  0  모든 시점의 상태가 표와 같다.\n"
+            "  1  표와 다른 것이 있다.\n"
+            "  2  명령의 인자가 잘못됐다.\n"
+            "  3  브라우저를 열기 전의 확인이 어긋났다. 고치는 방법을 보여 준다.\n"
+            "  4  점검을 끝내지 못했다(기다리는 시간이 지났거나 브라우저가 닫혔다)."
+        ),
+    )
+    parser.add_argument(
+        "--allowed-email",
+        required=True,
+        metavar="EMAIL",
+        help="허용 목록에 user로 넣은 Google 계정 A의 이메일",
+    )
+    parser.add_argument(
+        "--denied-email",
+        required=True,
+        metavar="EMAIL",
+        help="허용 목록에 없는 Google 계정 B의 이메일",
+    )
+    return parser
+
+
 def parse_args(argv: Sequence[str] | None = None) -> Args:
     """명령의 인자. 이메일은 소문자로 바꾼다."""
-    raise NotImplementedError
+    parser = _parser()
+    namespace = parser.parse_args(argv)
+    allowed = str(namespace.allowed_email).strip().lower()
+    denied = str(namespace.denied_email).strip().lower()
+    if not allowed or not denied:
+        parser.error("두 계정의 이메일이 비어 있으면 안 된다.")
+    if allowed == denied:
+        parser.error("--allowed-email과 --denied-email은 서로 다른 계정이어야 한다.")
+    return Args(allowed_email=allowed, denied_email=denied)
 
 
 # --- 브라우저를 열기 전의 확인 ---------------------------------------------------------------
@@ -376,24 +501,99 @@ class PreflightProblem:
 
 def health_problems(status: int | None, *, backend_url: str) -> list[PreflightProblem]:
     """백엔드의 `GET /api/health`가 200인지. status가 None이면 닿지 못한 것이다."""
-    raise NotImplementedError
+    if status == 200:
+        return []
+    seen = "닿지 못함" if status is None else f"응답: {status}"
+    return [
+        PreflightProblem(
+            problem=f"백엔드({backend_url})의 GET {HEALTH_PATH}가 200이 아니다({seen}).",
+            fix=(
+                f"README의 '로컬에서 서버 띄우기'대로 compose로 서버를 띄운다({COMPOSE_UP}). "
+                "API_PORT를 바꿔서 띄웠다면 같은 값을 이 스크립트에도 준다(환경변수나 .env)."
+            ),
+        )
+    ]
 
 
 def login_redirect_problems(
     status: int | None, location: str | None, *, frontend_url: str
 ) -> list[PreflightProblem]:
-    """`GET /api/auth/google/login`의 Location에서 redirect_uri와 client_id를 확인한다."""
-    raise NotImplementedError
+    """`GET /api/auth/google/login`의 Location에서 redirect_uri와 client_id를 확인한다.
+
+    서버와 이 스크립트의 `FRONTEND_URL`이 다르거나, `.env`에 Google 클라이언트의 값을 넣지 않고
+    compose를 띄웠으면 Google 화면까지 가서야 실패하므로 브라우저를 열기 전에 본다. Location의
+    나머지(state, nonce, code_challenge)는 보지도 출력하지도 않는다.
+    """
+    restart = f"고친 뒤에는 서버가 새 값을 받도록 compose로 다시 띄운다({COMPOSE_UP})."
+    if status != 302 or not location:
+        return [
+            PreflightProblem(
+                problem=(
+                    f"백엔드의 GET {LOGIN_PATH}가 302와 Location을 돌려주지 않았다"
+                    f"(응답: {status if status is not None else '닿지 못함'})."
+                ),
+                fix=f"서버의 로그(docker compose logs api)를 확인한다. {restart}",
+            )
+        ]
+    query = parse_qs(urlsplit(location).query, keep_blank_values=True)
+    problems: list[PreflightProblem] = []
+    expected = frontend_url + CALLBACK_PATH
+    redirect_uris = query.get("redirect_uri", [])
+    if redirect_uris != [expected]:
+        actual = ", ".join(redirect_uris) or "(없음)"
+        problems.append(
+            PreflightProblem(
+                problem=(
+                    "서버가 Google에 보내는 redirect_uri가 다르다"
+                    f"(지금: {actual}, 기대한 값: {expected})."
+                ),
+                fix=(
+                    "서버와 이 스크립트의 FRONTEND_URL이 다르다. 레포 최상위의 .env와 환경변수의 "
+                    f"FRONTEND_URL을 {frontend_url}로 맞춘다. {restart}"
+                ),
+            )
+        )
+    client_ids = query.get("client_id", [])
+    if len(client_ids) != 1 or not client_ids[0]:
+        problems.append(
+            PreflightProblem(
+                problem="서버가 Google에 보내는 client_id가 비어 있다.",
+                fix=(
+                    "레포 최상위의 .env에 GOOGLE_CLIENT_ID와 GOOGLE_CLIENT_SECRET을 넣는다"
+                    "(cp .env.example .env). compose는 이 두 값을 .env에서 서버에 넘긴다. "
+                    f"{restart}"
+                ),
+            )
+        )
+    return problems
 
 
 def frontend_port_problems(frontend_url: str, *, in_use: bool) -> list[PreflightProblem]:
     """대역 서버가 뜰 `FRONTEND_URL`의 포트가 비어 있는지."""
-    raise NotImplementedError
+    if not in_use:
+        return []
+    return [
+        PreflightProblem(
+            problem=f"{frontend_url}에서 이미 다른 프로그램이 연결을 받고 있다.",
+            fix=(
+                "프론트엔드의 개발 서버가 떠 있으면 끈다. 대역 서버가 서버와 같은 "
+                "FRONTEND_URL에 떠야 한다."
+            ),
+        )
+    ]
 
 
 def port_in_use(host: str, port: int) -> bool:
-    """그 주소에 무엇인가가 연결을 받고 있으면 True."""
-    raise NotImplementedError
+    """그 주소에 무엇인가가 연결을 받고 있으면 True.
+
+    포트를 잡아 보지 않고 연결해 본다. `localhost`는 IPv4와 IPv6의 두 주소로 풀리므로, 한쪽에
+    떠 있는 개발 서버도 찾기 위해서다.
+    """
+    try:
+        with socket.create_connection((host, port), timeout=1):
+            return True
+    except OSError:
+        return False
 
 
 # --- 데이터베이스의 상태 ---------------------------------------------------------------------
@@ -459,27 +659,146 @@ class PrecheckProblem:
 
 
 async def connect_read_only(database_url: str) -> asyncpg.Connection:
-    """모든 트랜잭션이 읽기 전용인 연결. 이 연결로는 어떤 행도 바꿀 수 없다."""
-    raise NotImplementedError
+    """모든 트랜잭션이 읽기 전용인 연결. 이 연결로는 어떤 행도 바꿀 수 없다.
+
+    주소는 asyncpg 형식(`postgresql://`)과 SQLAlchemy 형식(`postgresql+asyncpg://`)을 모두 받는다.
+    """
+    dsn = database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+    return await asyncpg.connect(
+        dsn, timeout=10, server_settings={"default_transaction_read_only": "on"}
+    )
 
 
 async def read_db_state(conn: asyncpg.Connection, *, emails: Sequence[str]) -> DbState:
-    """두 계정의 이메일에 관한 세 테이블의 행과 login_sessions의 전체 행 수를 한 번에 읽는다."""
-    raise NotImplementedError
+    """두 계정의 이메일에 관한 세 테이블의 행과 login_sessions의 전체 행 수를 한 번에 읽는다.
+
+    네 질의를 읽기 전용 트랜잭션 하나(REPEATABLE READ)에서 돌려, 같은 시점의 상태를 본다.
+    이메일은 소문자로 바꿔서 비교한다. 소문자가 아닌 행이 있어도 찾아서 판정이 보게 하기 위해서다.
+    """
+    lowered = sorted({email.lower() for email in emails})
+    async with conn.transaction(isolation="repeatable_read", readonly=True):
+        allowed = await conn.fetch(
+            "SELECT email, role, created_at FROM allowed_emails "
+            "WHERE lower(email) = ANY($1::text[]) ORDER BY email",
+            lowered,
+        )
+        users = await conn.fetch(
+            "SELECT id, email, google_sub, display_name, created_at FROM users "
+            "WHERE lower(email) = ANY($1::text[]) ORDER BY email",
+            lowered,
+        )
+        sessions = await conn.fetch(
+            "SELECT s.token_hash, s.user_id, u.email, s.expires_at, s.created_at "
+            "FROM login_sessions AS s JOIN users AS u ON u.id = s.user_id "
+            "WHERE lower(u.email) = ANY($1::text[]) ORDER BY s.created_at, s.token_hash",
+            lowered,
+        )
+        total = await conn.fetchval("SELECT count(*) FROM login_sessions")
+    if not isinstance(total, int):
+        raise TypeError(f"login_sessions의 행 수를 읽지 못했다: {total!r}")
+    return DbState(
+        allowed=tuple(AllowedRow(r["email"], r["role"], r["created_at"]) for r in allowed),
+        users=tuple(
+            UserRow(r["id"], r["email"], r["google_sub"], r["display_name"], r["created_at"])
+            for r in users
+        ),
+        sessions=tuple(
+            SessionRow(r["token_hash"], r["user_id"], r["email"], r["expires_at"], r["created_at"])
+            for r in sessions
+        ),
+        session_total=total,
+    )
+
+
+async def read_state(database_url: str, *, emails: Sequence[str]) -> DbState:
+    conn = await connect_read_only(database_url)
+    try:
+        return await read_db_state(conn, emails=emails)
+    finally:
+        await conn.close()
+
+
+def _sql_email(email: str) -> str:
+    return "lower('" + email.replace("'", "''") + "')"
+
+
+def _allow_as_user_sql(email: str) -> str:
+    # README의 "한 사람을 넣습니다. 이미 있으면 역할만 바꿉니다."와 같은 꼴.
+    return (
+        "INSERT INTO allowed_emails (email, role)\n"
+        f"VALUES ({_sql_email(email)}, 'user')\n"
+        "ON CONFLICT (email) DO UPDATE SET role = EXCLUDED.role;"
+    )
+
+
+def _remove_from_allowlist_sql(email: str) -> str:
+    # README의 "한 사람을 뺍니다."와 같은 꼴.
+    value = _sql_email(email)
+    return (
+        "BEGIN;\n"
+        "DELETE FROM login_sessions\n"
+        f"WHERE user_id IN (SELECT id FROM users WHERE email = {value});\n"
+        f"DELETE FROM allowed_emails WHERE email = {value};\n"
+        "COMMIT;"
+    )
+
+
+def _delete_user_sql(email: str) -> str:
+    return (
+        "-- 그 사람의 login_sessions 행도 함께 지워진다(ON DELETE CASCADE).\n"
+        f"DELETE FROM users WHERE email = {_sql_email(email)};"
+    )
 
 
 def precheck_problems(
     state: DbState, *, allowed_email: str, denied_email: str
 ) -> list[PrecheckProblem]:
-    """testcase.md 두 표의 "로그인 전" 줄과 다른 조건. 모두 맞으면 빈 목록이다."""
-    raise NotImplementedError
+    """testcase.md 두 표의 "로그인 전" 줄과 다른 조건. 모두 맞으면 빈 목록이다.
+
+    A가 허용 목록에 `user`로 있다, A의 `users` 행이 없다, B가 허용 목록에 없다, B의 `users` 행이
+    없다. A의 `login_sessions` 행은 A의 `users` 행이 없으면 있을 수 없다(외래 키).
+    """
+    a, b = allowed_email.lower(), denied_email.lower()
+    problems: list[PrecheckProblem] = []
+    allowed_a = state.allowed_for(a)
+    if not allowed_a:
+        problems.append(
+            PrecheckProblem(
+                f"계정 A({a})가 허용 목록에 없다. user로 있어야 한다.", _allow_as_user_sql(a)
+            )
+        )
+    elif allowed_a[0].role != "user":
+        problems.append(
+            PrecheckProblem(
+                f"계정 A({a})의 허용 목록의 역할이 user가 아니다(지금: {allowed_a[0].role}).",
+                _allow_as_user_sql(a),
+            )
+        )
+    if state.users_for(a):
+        problems.append(
+            PrecheckProblem(
+                f"계정 A({a})의 users 행이 있다. 로그인 전에는 없어야 한다.", _delete_user_sql(a)
+            )
+        )
+    if state.allowed_for(b):
+        problems.append(
+            PrecheckProblem(
+                f"계정 B({b})가 허용 목록에 있다. 없어야 한다.", _remove_from_allowlist_sql(b)
+            )
+        )
+    if state.users_for(b):
+        problems.append(
+            PrecheckProblem(f"계정 B({b})의 users 행이 있다. 없어야 한다.", _delete_user_sql(b))
+        )
+    return problems
 
 
 async def precheck(
     database_url: str, *, allowed_email: str, denied_email: str
 ) -> list[PrecheckProblem]:
     """점검 전 상태 확인(TC-1.7.2). 데이터베이스를 읽기만 하고, 맞추는 SQL은 실행하지 않는다."""
-    raise NotImplementedError
+    state = await read_state(database_url, emails=(allowed_email, denied_email))
+    return precheck_problems(state, allowed_email=allowed_email, denied_email=denied_email)
 
 
 # --- 브라우저의 상태 -------------------------------------------------------------------------
@@ -522,70 +841,719 @@ class Snapshot:
     browser: BrowserState
 
 
+def _sha256(value: str) -> str:
+    # 서버가 token_hash를 만드는 방법(SHA-256의 16진수 소문자)과 같다.
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
 def frontend_cookies(raw: Iterable[Mapping[str, object]], *, host: str) -> tuple[CookieState, ...]:
-    """Playwright가 돌려준 쿠키 가운데 프론트엔드 주소의 것만, 값을 SHA-256으로 바꿔 담는다."""
-    raise NotImplementedError
+    """Playwright가 돌려준 쿠키 가운데 프론트엔드 주소의 것만, 값을 SHA-256으로 바꿔 담는다.
+
+    쿠키를 읽는 자리에서 바로 부른다. 값 자체는 돌려주는 것 어디에도 남지 않는다. Google의 쿠키는
+    프론트엔드의 것이 아니므로 해시도 남기지 않는다.
+    """
+    return tuple(
+        CookieState(
+            name=str(cookie.get("name", "")),
+            path=str(cookie.get("path", "")),
+            http_only=bool(cookie.get("httpOnly")),
+            secure=bool(cookie.get("secure")),
+            same_site=str(cookie.get("sameSite", "")),
+            value_sha256=_sha256(str(cookie.get("value", ""))),
+        )
+        for cookie in raw
+        if str(cookie.get("domain", "")).lstrip(".") == host
+    )
 
 
 def fetch_result(status: int, text: str) -> FetchResult:
-    raise NotImplementedError
+    try:
+        body = json.loads(text) if text else None
+    except ValueError:
+        body = None
+    return FetchResult(status=status, body=body if isinstance(body, dict) else None)
 
 
 def returned_to_frontend(url: str, frontend_url: str) -> bool:
     """Google에서 프론트엔드의 화면(`/api` 밖의 경로)으로 돌아왔는지."""
-    raise NotImplementedError
+    return url.startswith(frontend_url + "/") and not urlsplit(url).path.startswith(
+        API_PREFIX + "/"
+    )
+
+
+def _display_url(url: str) -> str:
+    # `/api` 아래의 주소(로그인 결과 처리)는 쿼리에 Google의 code와 state가 있으므로 쿼리를 뺀다.
+    parts = urlsplit(url)
+    if parts.path.startswith(API_PREFIX + "/") and parts.query:
+        return f"{parts.scheme}://{parts.netloc}{parts.path}?(쿼리 생략)"
+    return url
 
 
 # --- 표와의 대조 -----------------------------------------------------------------------------
+#
+# 판정의 문장은 표의 칸 이름(allowed_emails, users, login_sessions, 브라우저)으로 시작한다. 쿠키의
+# 값과 token_hash의 값은 문장에 넣지 않는다.
+
+
+def _time(value: datetime) -> str:
+    return value.isoformat(timespec="seconds")
+
+
+def _row_text(row: AllowedRow | UserRow | SessionRow) -> str:
+    match row:
+        case AllowedRow():
+            return f"{row.email} role={row.role} created_at={_time(row.created_at)}"
+        case UserRow():
+            return (
+                f"{row.email} id={row.id} google_sub={row.google_sub} "
+                f"display_name={row.display_name!r} created_at={_time(row.created_at)}"
+            )
+        case SessionRow():
+            return (
+                f"{row.user_email} user_id={row.user_id} created_at={_time(row.created_at)} "
+                f"expires_at={_time(row.expires_at)}"
+            )
+
+
+def _rows_text(rows: Sequence[AllowedRow | UserRow | SessionRow]) -> str:
+    return "; ".join(_row_text(row) for row in rows) or "행 없음"
+
+
+def _token_hashes(rows: Sequence[AllowedRow | UserRow | SessionRow]) -> set[str]:
+    return {row.token_hash for row in rows if isinstance(row, SessionRow)}
+
+
+def _unchanged(
+    column: str,
+    previous: Sequence[AllowedRow | UserRow | SessionRow],
+    now: Sequence[AllowedRow | UserRow | SessionRow],
+    label: str,
+) -> list[str]:
+    """ "그대로입니다"의 칸. 바로 앞 시점과 값까지 같아야 한다."""
+    if tuple(previous) == tuple(now):
+        return []
+    message = (
+        f"{column}: {label} 시점과 같아야 하는데 다르다. "
+        f"{label}: {_rows_text(previous)} / 지금: {_rows_text(now)}"
+    )
+    if _token_hashes(previous) != _token_hashes(now):
+        message += " (token_hash가 다르다)"
+    return [message]
+
+
+def _no_cookies(browser: BrowserState) -> list[str]:
+    if not browser.cookies:
+        return []
+    names = ", ".join(cookie.name for cookie in browser.cookies)
+    return [f"브라우저: 쿠키가 없어야 하는데 {names}가 있다."]
+
+
+def _no_cookie(browser: BrowserState, name: str) -> list[str]:
+    if not browser.cookies_named(name):
+        return []
+    return [f"브라우저: {name} 쿠키가 있다. 없어야 한다."]
+
+
+def _me_status(browser: BrowserState, expected: int) -> list[str]:
+    if browser.me is None:
+        return [f"브라우저: GET {ME_PATH}를 부르지 않았다."]
+    if browser.me.status != expected:
+        return [f"브라우저: GET {ME_PATH}가 {expected}가 아니다(지금: {browser.me.status})."]
+    return []
+
+
+def _url(browser: BrowserState, expected: str) -> list[str]:
+    if browser.url == expected:
+        return []
+    return [f"브라우저: 주소가 {expected}가 아니다(지금: {_display_url(browser.url)})."]
 
 
 def judge_allowed_before_login(now: Snapshot, *, email: str) -> list[str]:
     """점검 1의 로그인 전."""
-    raise NotImplementedError
+    mismatches: list[str] = []
+    allowed = now.db.allowed_for(email)
+    if len(allowed) != 1:
+        mismatches.append(f"allowed_emails: A의 행이 {len(allowed)}개다. 하나여야 한다.")
+    elif allowed[0].role != "user":
+        mismatches.append(f"allowed_emails: A의 role이 user가 아니다(지금: {allowed[0].role}).")
+    if users := now.db.users_for(email):
+        mismatches.append(f"users: A의 행이 {len(users)}개 있다. 없어야 한다.")
+    if sessions := now.db.sessions_for(email):
+        mismatches.append(f"login_sessions: A의 행이 {len(sessions)}개 있다. 없어야 한다.")
+    mismatches += _no_cookies(now.browser)
+    mismatches += _me_status(now.browser, 401)
+    return mismatches
 
 
 def judge_allowed_after_login(
     now: Snapshot, *, before: Snapshot, email: str, login_at: datetime, frontend_url: str
 ) -> list[str]:
     """점검 1의 로그인 후."""
-    raise NotImplementedError
+    mismatches = _unchanged(
+        "allowed_emails", before.db.allowed_for(email), now.db.allowed_for(email), "로그인 전"
+    )
+
+    users = now.db.users_for(email)
+    if len(users) != 1:
+        mismatches.append(f"users: A의 행이 {len(users)}개다. 하나가 생겨야 한다.")
+    else:
+        user = users[0]
+        if user.email != email.lower():
+            mismatches.append(
+                f"users: email이 소문자의 {email.lower()}가 아니다(지금: {user.email})."
+            )
+        if not user.google_sub:
+            mismatches.append("users: google_sub가 비어 있다.")
+        if not user.display_name:
+            mismatches.append("users: display_name이 비어 있다. A의 Google 이름이어야 한다.")
+        if abs(user.created_at - login_at) > TIME_TOLERANCE:
+            mismatches.append(
+                "users: created_at이 방금이 아니다. 로그인한 시각"
+                f"({_time(login_at)})과 1분 안이어야 한다(지금: {_time(user.created_at)})."
+            )
+
+    session_cookies = now.browser.cookies_named(SESSION_COOKIE)
+    sessions = now.db.sessions_for(email)
+    if len(sessions) != 1:
+        mismatches.append(f"login_sessions: A의 행이 {len(sessions)}개다. 하나가 생겨야 한다.")
+    else:
+        session = sessions[0]
+        if len(session_cookies) != 1:
+            mismatches.append(
+                f"login_sessions: {SESSION_COOKIE} 쿠키가 하나가 아니어서 token_hash를 "
+                "대조하지 못했다."
+            )
+        elif session.token_hash != session_cookies[0].value_sha256:
+            mismatches.append(
+                f"login_sessions: token_hash가 {SESSION_COOKIE} 쿠키 값의 SHA-256과 다르다."
+            )
+        expected = login_at + LOGIN_SESSION_TTL
+        if abs(session.expires_at - expected) > TIME_TOLERANCE:
+            mismatches.append(
+                "login_sessions: expires_at이 로그인한 시각에 336시간을 더한 시각"
+                f"({_time(expected)})과 1분 안이어야 한다(지금: {_time(session.expires_at)})."
+            )
+
+    mismatches += _url(now.browser, frontend_url + "/")
+    if len(session_cookies) != 1:
+        mismatches.append(
+            f"브라우저: {SESSION_COOKIE} 쿠키가 {len(session_cookies)}개다. 하나여야 한다."
+        )
+    else:
+        cookie = session_cookies[0]
+        if not cookie.http_only:
+            mismatches.append(f"브라우저: {SESSION_COOKIE} 쿠키에 HttpOnly가 없다.")
+        if cookie.same_site != "Lax":
+            mismatches.append(
+                f"브라우저: {SESSION_COOKIE} 쿠키의 SameSite가 Lax가 아니다"
+                f"(지금: {cookie.same_site or '없음'})."
+            )
+        if cookie.path != "/":
+            mismatches.append(
+                f"브라우저: {SESSION_COOKIE} 쿠키의 Path가 /가 아니다(지금: {cookie.path})."
+            )
+        if cookie.secure:
+            mismatches.append(
+                f"브라우저: {SESSION_COOKIE} 쿠키에 Secure가 붙었다. http의 FRONTEND_URL에서는 "
+                "붙지 않아야 한다."
+            )
+    mismatches += _no_cookie(now.browser, STATE_COOKIE)
+    return mismatches
 
 
 def judge_allowed_before_logout(now: Snapshot, *, after_login: Snapshot, email: str) -> list[str]:
-    """점검 1의 로그아웃 전."""
-    raise NotImplementedError
+    """점검 1의 로그아웃 전. 세 테이블은 로그인 후와 값까지 같아야 한다."""
+    mismatches = [
+        *_unchanged(
+            "allowed_emails",
+            after_login.db.allowed_for(email),
+            now.db.allowed_for(email),
+            "로그인 후",
+        ),
+        *_unchanged("users", after_login.db.users_for(email), now.db.users_for(email), "로그인 후"),
+        *_unchanged(
+            "login_sessions",
+            after_login.db.sessions_for(email),
+            now.db.sessions_for(email),
+            "로그인 후",
+        ),
+    ]
+    me = now.browser.me
+    if me is None or me.status != 200:
+        return mismatches + _me_status(now.browser, 200)
+    body = me.body or {}
+    if body.get("email") != email.lower():
+        mismatches.append(
+            f"브라우저: GET {ME_PATH}의 email이 A({email.lower()})가 아니다"
+            f"(지금: {body.get('email')!r})."
+        )
+    if body.get("role") != "user":
+        mismatches.append(
+            f"브라우저: GET {ME_PATH}의 role이 user가 아니다(지금: {body.get('role')!r})."
+        )
+    users = now.db.users_for(email)
+    if len(users) != 1:
+        mismatches.append(
+            f"브라우저: users에 A의 행이 하나가 아니어서 GET {ME_PATH}의 display_name을 "
+            "대조하지 못했다."
+        )
+    elif body.get("display_name") != users[0].display_name:
+        mismatches.append(
+            f"브라우저: GET {ME_PATH}의 display_name이 users.display_name과 다르다"
+            f"(지금: {body.get('display_name')!r}, users: {users[0].display_name!r})."
+        )
+    return mismatches
 
 
 def judge_allowed_after_logout(now: Snapshot, *, before_logout: Snapshot, email: str) -> list[str]:
     """점검 1의 로그아웃 후."""
-    raise NotImplementedError
+    mismatches = [
+        *_unchanged(
+            "allowed_emails",
+            before_logout.db.allowed_for(email),
+            now.db.allowed_for(email),
+            "로그아웃 전",
+        ),
+        *_unchanged(
+            "users", before_logout.db.users_for(email), now.db.users_for(email), "로그아웃 전"
+        ),
+    ]
+    if sessions := now.db.sessions_for(email):
+        mismatches.append(f"login_sessions: A의 행이 {len(sessions)}개 남아 있다. 없어야 한다.")
+    if now.browser.logout_status is None:
+        mismatches.append(f"브라우저: 로그아웃(POST {LOGOUT_PATH})을 부르지 않았다.")
+    elif now.browser.logout_status != 204:
+        mismatches.append(
+            f"브라우저: 로그아웃의 응답이 204가 아니다(지금: {now.browser.logout_status})."
+        )
+    mismatches += _no_cookie(now.browser, SESSION_COOKIE)
+    mismatches += _me_status(now.browser, 401)
+    return mismatches
 
 
 def judge_denied_before_login(now: Snapshot, *, email: str) -> list[str]:
-    """점검 2의 로그인 전."""
-    raise NotImplementedError
+    """점검 2의 로그인 전. login_sessions는 전체 행의 수를 기록하기만 한다."""
+    mismatches: list[str] = []
+    if allowed := now.db.allowed_for(email):
+        mismatches.append(f"allowed_emails: B의 행이 {len(allowed)}개 있다. 없어야 한다.")
+    if users := now.db.users_for(email):
+        mismatches.append(f"users: B의 행이 {len(users)}개 있다. 없어야 한다.")
+    mismatches += _no_cookies(now.browser)
+    return mismatches
 
 
 def judge_denied_after_attempt(
     now: Snapshot, *, before: Snapshot, email: str, frontend_url: str
 ) -> list[str]:
     """점검 2의 로그인 시도 후."""
-    raise NotImplementedError
+    mismatches = [
+        *_unchanged(
+            "allowed_emails", before.db.allowed_for(email), now.db.allowed_for(email), "로그인 전"
+        ),
+        *_unchanged("users", before.db.users_for(email), now.db.users_for(email), "로그인 전"),
+    ]
+    if now.db.session_total != before.db.session_total:
+        mismatches.append(
+            "login_sessions: 전체 행의 수가 로그인 전과 다르다"
+            f"(로그인 전: {before.db.session_total}, 지금: {now.db.session_total})."
+        )
+    mismatches += _url(now.browser, frontend_url + NOT_ALLOWED_PATH)
+    mismatches += _no_cookie(now.browser, SESSION_COOKIE)
+    mismatches += _no_cookie(now.browser, STATE_COOKIE)
+    mismatches += _me_status(now.browser, 401)
+    return mismatches
 
 
 # --- 출력 ------------------------------------------------------------------------------------
+
+
+def _token_relation(session: SessionRow, browser: BrowserState) -> str:
+    cookies = browser.cookies_named(SESSION_COOKIE)
+    if len(cookies) != 1:
+        return f"token_hash는 대조하지 않음({SESSION_COOKIE} 쿠키가 {len(cookies)}개)"
+    if session.token_hash == cookies[0].value_sha256:
+        return f"token_hash는 {SESSION_COOKIE} 쿠키 값의 SHA-256과 같다"
+    return f"token_hash는 {SESSION_COOKIE} 쿠키 값의 SHA-256과 다르다"
+
+
+def _cookie_text(cookie: CookieState) -> str:
+    flags = [f"Path={cookie.path}", f"SameSite={cookie.same_site or '(없음)'}"]
+    flags.append("HttpOnly" if cookie.http_only else "HttpOnly 없음")
+    flags.append("Secure" if cookie.secure else "Secure 없음")
+    return f"{cookie.name}: " + ", ".join(flags)
 
 
 def render_snapshot(
     title: str, snapshot: Snapshot, *, allowed_email: str, denied_email: str
 ) -> str:
     """한 시점의 세 테이블과 브라우저의 상태. 쿠키의 값과 token_hash의 값은 출력하지 않는다."""
-    raise NotImplementedError
+    db, browser = snapshot.db, snapshot.browser
+    accounts = (("A", allowed_email), ("B", denied_email))
+    lines = [f"=== {title}", "allowed_emails"]
+    for label, email in accounts:
+        lines.append(f"  {label} {email}: {_rows_text(db.allowed_for(email))}")
+    lines.append("users")
+    for label, email in accounts:
+        lines.append(f"  {label} {email}: {_rows_text(db.users_for(email))}")
+    lines.append(f"login_sessions (전체 {db.session_total}행)")
+    for label, email in accounts:
+        sessions = db.sessions_for(email)
+        if not sessions:
+            lines.append(f"  {label} {email}: 행 없음")
+        for session in sessions:
+            relation = _token_relation(session, browser)
+            lines.append(f"  {label} {_row_text(session)}, {relation}")
+    lines.append("브라우저")
+    lines.append(f"  주소: {_display_url(browser.url)}")
+    if browser.cookies:
+        lines.append("  쿠키:")
+        lines.extend(f"    {_cookie_text(cookie)}" for cookie in browser.cookies)
+    else:
+        lines.append("  쿠키: 없음")
+    if browser.me is not None:
+        body = json.dumps(browser.me.body, ensure_ascii=False) if browser.me.body else ""
+        lines.append(f"  GET {ME_PATH}: {browser.me.status} {body}".rstrip())
+    if browser.logout_status is not None:
+        lines.append(f"  POST {LOGOUT_PATH}: {browser.logout_status}")
+    return "\n".join(lines)
 
 
 def render_preflight(problems: Sequence[PreflightProblem]) -> str:
-    raise NotImplementedError
+    lines = ["브라우저를 열기 전의 확인에서 어긋난 것이 있어, 브라우저를 열지 않고 끝낸다.", ""]
+    for number, problem in enumerate(problems, start=1):
+        lines.append(f"{number}. {problem.problem}")
+        lines.append("   고치는 방법:")
+        lines.extend(f"     {line}" for line in problem.fix.splitlines())
+        lines.append("")
+    return "\n".join(lines).rstrip()
 
 
 def render_report(mismatches: Sequence[str]) -> str:
-    raise NotImplementedError
+    if not mismatches:
+        return "=== 결과\n모든 시점의 상태가 testcase.md의 표와 같다."
+    lines = [f"=== 결과\ntestcase.md의 표와 다른 것이 {len(mismatches)}개 있다."]
+    lines.extend(f"- {mismatch}" for mismatch in mismatches)
+    return "\n".join(lines)
+
+
+# --- 브라우저를 모는 층 ----------------------------------------------------------------------
+#
+# 아래는 위의 순수 함수들을 부르기만 한다. 판정과 출력의 규칙을 여기에 두지 않는다.
+
+
+class CheckAbortedError(Exception):
+    """점검을 끝내지 못했다. 메시지는 사람에게 보여 줄 안내다."""
+
+
+def _http_get(backend_url: str, path: str) -> tuple[int, str | None] | None:
+    """백엔드에 GET을 보내 상태 코드와 Location을 돌려준다. 닿지 못하면 None.
+
+    리디렉션을 따라가지 않는다. 응답의 Set-Cookie와 본문은 읽기만 하고 버린다.
+    """
+    parts = urlsplit(backend_url)
+    conn = http.client.HTTPConnection(
+        parts.hostname or "localhost", parts.port or 80, timeout=PREFLIGHT_TIMEOUT_SECONDS
+    )
+    try:
+        conn.request("GET", path)
+        response = conn.getresponse()
+        response.read()
+        return response.status, response.getheader("Location")
+    except OSError, http.client.HTTPException:
+        return None
+    finally:
+        conn.close()
+
+
+async def preflight(settings: CheckSettings, args: Args) -> list[PreflightProblem]:
+    """브라우저를 열기 전의 네 확인. 서버가 응답하지 않으면 나머지는 보지 않는다."""
+    health = _http_get(settings.backend_url, HEALTH_PATH)
+    problems = health_problems(health[0] if health else None, backend_url=settings.backend_url)
+    if problems:
+        return problems
+
+    login = _http_get(settings.backend_url, LOGIN_PATH)
+    problems += login_redirect_problems(
+        login[0] if login else None,
+        login[1] if login else None,
+        frontend_url=settings.frontend_url,
+    )
+
+    try:
+        found = await precheck(
+            settings.database_url,
+            allowed_email=args.allowed_email,
+            denied_email=args.denied_email,
+        )
+    except (OSError, asyncpg.PostgresError) as error:
+        problems.append(
+            PreflightProblem(
+                problem=(
+                    f"개발용 데이터베이스(localhost:{settings.db_port})를 읽지 못했다: "
+                    f"{type(error).__name__}"
+                ),
+                fix=(
+                    f"compose로 띄웠는지 확인한다({COMPOSE_UP}). DB_PORT를 바꿔서 띄웠다면 "
+                    "같은 값을 이 스크립트에도 준다(환경변수나 .env)."
+                ),
+            )
+        )
+    else:
+        problems += [
+            PreflightProblem(
+                problem=item.problem,
+                fix=(
+                    "아래 SQL을 실행한다. 스크립트는 실행하지 않는다. "
+                    f"접속은 {PSQL}\n{item.fix_sql}"
+                ),
+            )
+            for item in found
+        ]
+
+    problems += frontend_port_problems(
+        settings.frontend_url,
+        in_use=port_in_use(settings.frontend_host, settings.frontend_port),
+    )
+    return problems
+
+
+FETCH_SCRIPT = """
+async ([path, method]) => {
+  const response = await fetch(path, { method, credentials: 'include' });
+  return { status: response.status, body: await response.text() };
+}
+"""
+
+
+async def _fetch(page: Page, path: str, method: str = "GET") -> FetchResult:
+    """프론트엔드가 하는 대로 브라우저 안에서 `credentials: 'include'`로 부른다."""
+    result = await page.evaluate(FETCH_SCRIPT, [path, method])
+    return fetch_result(int(result["status"]), str(result["body"]))
+
+
+async def _browser_state(
+    page: Page,
+    context: BrowserContext,
+    settings: CheckSettings,
+    *,
+    me: FetchResult | None = None,
+    logout_status: int | None = None,
+) -> BrowserState:
+    # 쿠키를 읽는 자리에서 바로 해시로 바꾼다. 값은 이 줄을 벗어나지 않는다.
+    cookies = frontend_cookies(await context.cookies(), host=settings.frontend_host)
+    return BrowserState(url=page.url, cookies=cookies, me=me, logout_status=logout_status)
+
+
+async def _snapshot(
+    page: Page,
+    context: BrowserContext,
+    settings: CheckSettings,
+    args: Args,
+    *,
+    me: FetchResult | None = None,
+    logout_status: int | None = None,
+) -> Snapshot:
+    db = await read_state(settings.database_url, emails=(args.allowed_email, args.denied_email))
+    browser = await _browser_state(page, context, settings, me=me, logout_status=logout_status)
+    return Snapshot(db=db, browser=browser)
+
+
+async def _log_in(page: Page, settings: CheckSettings, *, label: str, email: str) -> datetime:
+    """프론트엔드가 하는 대로 화면을 로그인 시작 주소로 옮기고, 돌아올 때까지 기다린다."""
+    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+    await page.goto(settings.frontend_url + LOGIN_PATH, wait_until="commit")
+    print(
+        f"\n>>> 브라우저의 Google 화면에서 계정 {label}({email})를 고르세요. 비밀번호를 물으면 "
+        f"브라우저에서 직접 넣습니다. 최대 {LOGIN_WAIT_SECONDS // 60}분 기다립니다.",
+        flush=True,
+    )
+    try:
+        await page.wait_for_url(
+            lambda url: returned_to_frontend(url, settings.frontend_url),
+            timeout=LOGIN_WAIT_SECONDS * 1000,
+        )
+    except PlaywrightTimeoutError:
+        raise CheckAbortedError(
+            f"{LOGIN_WAIT_SECONDS // 60}분 안에 {settings.frontend_url}로 돌아오지 않았다. "
+            "Google이 자동화된 브라우저의 로그인을 막았을 수 있다. 그 경우의 방법은 "
+            "docs/ADR.md의 ADR-026 재검토 조건에 따라 사람이 정한다."
+        ) from None
+    return datetime.now(UTC)
+
+
+def _report(title: str, snapshot: Snapshot, args: Args) -> None:
+    print(
+        "\n"
+        + render_snapshot(
+            title, snapshot, allowed_email=args.allowed_email, denied_email=args.denied_email
+        ),
+        flush=True,
+    )
+
+
+def _tagged(title: str, mismatches: list[str]) -> list[str]:
+    return [f"[{title}] {mismatch}" for mismatch in mismatches]
+
+
+async def _check_allowed(browser: Browser, settings: CheckSettings, args: Args) -> list[str]:
+    """점검 1: 허용된 계정 A의 로그인과 로그아웃 (TC-1.7.3)."""
+    email = args.allowed_email
+    context = await browser.new_context()
+    try:
+        page = await context.new_page()
+        await page.goto(settings.frontend_url + "/")
+
+        title = "점검 1 · 로그인 전"
+        before = await _snapshot(page, context, settings, args, me=await _fetch(page, ME_PATH))
+        _report(title, before, args)
+        mismatches = _tagged(title, judge_allowed_before_login(before, email=email))
+
+        login_at = await _log_in(page, settings, label="A", email=email)
+        title = "점검 1 · 로그인 후"
+        after_login = await _snapshot(page, context, settings, args)
+        _report(title, after_login, args)
+        mismatches += _tagged(
+            title,
+            judge_allowed_after_login(
+                after_login,
+                before=before,
+                email=email,
+                login_at=login_at,
+                frontend_url=settings.frontend_url,
+            ),
+        )
+
+        # 두 시점 사이에는 GET /api/me를 한 번 부른 것만 있다.
+        title = "점검 1 · 로그아웃 전"
+        me = await _fetch(page, ME_PATH)
+        before_logout = await _snapshot(page, context, settings, args, me=me)
+        _report(title, before_logout, args)
+        mismatches += _tagged(
+            title, judge_allowed_before_logout(before_logout, after_login=after_login, email=email)
+        )
+
+        title = "점검 1 · 로그아웃 후"
+        logout = await _fetch(page, LOGOUT_PATH, "POST")
+        me = await _fetch(page, ME_PATH)
+        after_logout = await _snapshot(
+            page, context, settings, args, me=me, logout_status=logout.status
+        )
+        _report(title, after_logout, args)
+        mismatches += _tagged(
+            title,
+            judge_allowed_after_logout(after_logout, before_logout=before_logout, email=email),
+        )
+        return mismatches
+    finally:
+        await context.close()
+
+
+async def _check_denied(browser: Browser, settings: CheckSettings, args: Args) -> list[str]:
+    """점검 2: 허용 목록 밖 계정 B의 로그인 시도 (TC-1.7.4)."""
+    email = args.denied_email
+    context = await browser.new_context()
+    try:
+        page = await context.new_page()
+        await page.goto(settings.frontend_url + "/")
+
+        title = "점검 2 · 로그인 전"
+        before = await _snapshot(page, context, settings, args)
+        _report(title, before, args)
+        mismatches = _tagged(title, judge_denied_before_login(before, email=email))
+
+        await _log_in(page, settings, label="B", email=email)
+        title = "점검 2 · 로그인 시도 후"
+        after = await _snapshot(page, context, settings, args, me=await _fetch(page, ME_PATH))
+        _report(title, after, args)
+        mismatches += _tagged(
+            title,
+            judge_denied_after_attempt(
+                after, before=before, email=email, frontend_url=settings.frontend_url
+            ),
+        )
+        return mismatches
+    finally:
+        await context.close()
+
+
+async def run_checks(settings: CheckSettings, args: Args) -> list[str]:
+    """대역 서버와 화면이 보이는 브라우저를 띄워 두 점검을 차례로 하고, 표와 다른 것을 모은다."""
+    from playwright.async_api import Error as PlaywrightError
+    from playwright.async_api import async_playwright
+
+    stand_in = FrontendStandIn(
+        listen_host=settings.frontend_host,
+        listen_port=settings.frontend_port,
+        backend_url=settings.backend_url,
+    )
+    try:
+        stand_in.start()
+    except OSError as error:
+        raise CheckAbortedError(
+            f"대역 서버를 {settings.frontend_url}에 띄우지 못했다: {type(error).__name__}. "
+            "프론트엔드의 개발 서버가 떠 있으면 끈다."
+        ) from None
+    try:
+        async with async_playwright() as playwright:
+            try:
+                # 점검마다 새 컨텍스트를 만들고, 프로필을 디스크에 남기지 않는다.
+                browser = await playwright.chromium.launch(headless=False)
+            except PlaywrightError:
+                raise CheckAbortedError(
+                    "Chromium을 열지 못했다. 처음 한 번 `uv run playwright install chromium`으로 "
+                    "브라우저를 설치한다."
+                ) from None
+            try:
+                return [
+                    *await _check_allowed(browser, settings, args),
+                    *await _check_denied(browser, settings, args),
+                ]
+            finally:
+                await browser.close()
+    except PlaywrightError as error:
+        # 메시지에는 결과 처리의 주소(code와 state)가 들어 있을 수 있으므로 종류만 보여 준다.
+        raise CheckAbortedError(
+            f"브라우저가 닫혔거나 Playwright가 실패했다: {type(error).__name__}"
+        ) from None
+    except (OSError, asyncpg.PostgresError) as error:
+        raise CheckAbortedError(
+            f"점검 중에 개발용 데이터베이스를 읽지 못했다: {type(error).__name__}"
+        ) from None
+    finally:
+        stand_in.stop()
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv)
+    try:
+        dotenv = (
+            parse_dotenv(DOTENV_PATH.read_text(encoding="utf-8")) if DOTENV_PATH.exists() else {}
+        )
+        settings = resolve_settings(os.environ, dotenv)
+    except (OSError, ValueError) as error:
+        print(f"설정을 읽지 못했다: {error}", file=sys.stderr)
+        return EXIT_PREFLIGHT
+
+    print(
+        f"FRONTEND_URL={settings.frontend_url}, 백엔드={settings.backend_url}, "
+        f"데이터베이스=localhost:{settings.db_port}",
+        flush=True,
+    )
+    problems = asyncio.run(preflight(settings, args))
+    if problems:
+        print(render_preflight(problems), file=sys.stderr)
+        return EXIT_PREFLIGHT
+
+    try:
+        mismatches = asyncio.run(run_checks(settings, args))
+    except CheckAbortedError as error:
+        print(f"\n점검을 끝내지 못했다. {error}", file=sys.stderr)
+        return EXIT_ABORTED
+
+    print("\n" + render_report(mismatches))
+    return EXIT_MISMATCH if mismatches else EXIT_OK
+
+
+if __name__ == "__main__":
+    sys.exit(main())
