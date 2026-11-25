@@ -22,6 +22,16 @@ TOKEN = re.compile(r"[A-Za-z0-9_-]{43}")
 
 # 임의의 값을 만들 수 있는 모듈. 이 모듈을 import하는 곳이 security.py 하나뿐이어야 한다.
 RANDOM_MODULES = frozenset({"secrets", "random"})
+# 위 모듈을 import하지 않고도 임의의 값이나 추측할 수 있는 값을 만드는 함수(1차 리뷰 TST-5). uuid1은
+# 시각과 MAC 주소로 만든다. uuid3와 uuid5는 이름의 해시라 임의의 값이 아니다.
+RANDOM_FUNCTIONS = {
+    "os": frozenset({"urandom", "getrandom"}),
+    "uuid": frozenset({"uuid1", "uuid4", "uuid6", "uuid7", "uuid8"}),
+    "importlib": frozenset({"import_module"}),
+}
+# 문자열로 모듈을 가져오는 내장 함수. 가져오는 이름을 정적으로 알 수 없으므로 쓰는 것 자체를 센다.
+# importlib.import_module도 같은 이유로 RANDOM_FUNCTIONS에 둔다.
+DYNAMIC_IMPORT_BUILTIN = "__import__"
 
 
 # --- TC-1.3.17 (앞부분) --------------------------------------------------------
@@ -106,18 +116,40 @@ def test_secure_equals_false(left: str, right: str) -> None:
 # --- 임의의 값을 만드는 곳은 하나뿐 ---------------------------------------------
 
 
-def imported_random_modules(source: str) -> set[str]:
-    """소스의 import 구문 가운데 secrets나 random을 가져오는 것의 최상위 모듈 이름."""
+def random_sources(source: str) -> set[str]:
+    """소스에서 임의의 값을 만들 수 있는 것의 이름.
+
+    `secrets`, `random`(import), `os.urandom`, `uuid.uuid4`(함수), `importlib.import_module`,
+    `__import__`(문자열로 가져오기)의 꼴이다. `import os as o`처럼 다른 이름으로 가져와도 센다.
+    """
+    tree = ast.parse(source)
+    # import한 이름이 가리키는 모듈. `import os as o`면 o → os.
+    module_names: dict[str, str] = {}
     found: set[str] = set()
-    for node in ast.walk(ast.parse(source)):
+    for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            names = [alias.name for alias in node.names]
+            for alias in node.names:
+                top = alias.name.split(".")[0]
+                if top in RANDOM_MODULES:
+                    found.add(top)
+                module_names[alias.asname or top] = alias.name if alias.asname else top
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            # `from . import random`처럼 상대 경로로 가져온 것은 이 레포의 모듈이다.
-            names = [node.module]
-        else:
-            continue
-        found.update(top for top in (name.split(".")[0] for name in names) if top in RANDOM_MODULES)
+            # `from . import random`처럼 상대 경로로 가져온 것은 이 레포의 모듈이라 넘어간다.
+            top = node.module.split(".")[0]
+            if top in RANDOM_MODULES:
+                found.add(top)
+            for alias in node.names:
+                if alias.name in RANDOM_FUNCTIONS.get(node.module, ()):
+                    found.add(f"{node.module}.{alias.name}")
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            module = module_names.get(node.value.id)
+            if module is not None and node.attr in RANDOM_FUNCTIONS.get(module, ()):
+                found.add(f"{module}.{node.attr}")
+        if (isinstance(node, ast.Name) and node.id == DYNAMIC_IMPORT_BUILTIN) or (
+            isinstance(node, ast.Attribute) and node.attr == DYNAMIC_IMPORT_BUILTIN
+        ):
+            found.add(DYNAMIC_IMPORT_BUILTIN)
     return found
 
 
@@ -133,19 +165,39 @@ def imported_random_modules(source: str) -> set[str]:
         ("from . import random", set()),
         ("import secretstorage, randomname", set()),
         ("from uuid import UUID", set()),
+        # 1차 리뷰 TST-5: import 구문만 보면 놓치는 것들
+        ("import os\nos.urandom(32)", {"os.urandom"}),
+        ("import os as o\no.urandom(32)", {"os.urandom"}),
+        ("from os import urandom", {"os.urandom"}),
+        ("from os import getrandom as g", {"os.getrandom"}),
+        ("import uuid\nuuid.uuid4().hex", {"uuid.uuid4"}),
+        ("import uuid as u\nu.uuid1()", {"uuid.uuid1"}),
+        ("from uuid import uuid4", {"uuid.uuid4"}),
+        ("from uuid import uuid7 as make", {"uuid.uuid7"}),
+        ("__import__('secrets').token_urlsafe(32)", {"__import__"}),
+        ("import builtins\nbuiltins.__import__('random')", {"__import__"}),
+        ("import importlib\nimportlib.import_module('random')", {"importlib.import_module"}),
+        ("from importlib import import_module", {"importlib.import_module"}),
+        # 임의의 값을 만들지 않는 것은 세지 않는다. app/auth/models.py는 uuid.UUID를 쓴다.
+        ("import uuid\nx: uuid.UUID", set()),
+        ("import uuid\nuuid.uuid5(uuid.NAMESPACE_DNS, 'a')", set()),
+        ("import os\nos.environ.get('A')", set()),
+        ("import hashlib\nhashlib.sha256(b'a')", set()),
     ],
 )
-def test_imported_random_modules_detects_imports(source: str, expected: set[str]) -> None:
-    # 아래 검사가 import를 놓치면 다른 파일이 따로 임의의 값을 만들어도 초록이 된다.
-    assert imported_random_modules(source) == expected
+def test_random_sources_detects_every_way_to_make_a_random_value(
+    source: str, expected: set[str]
+) -> None:
+    # 아래 검사가 이것들을 놓치면 다른 파일이 따로 임의의 값을 만들어도 초록이 된다.
+    assert random_sources(source) == expected
 
 
-def test_only_security_module_imports_secrets_or_random() -> None:
-    importers = {
-        path.relative_to(REPO_ROOT).as_posix()
+def test_only_security_module_has_a_random_source() -> None:
+    sources = {
+        path.relative_to(REPO_ROOT).as_posix(): found
         for path in APP_DIR.rglob("*.py")
-        if imported_random_modules(path.read_text(encoding="utf-8"))
+        if (found := random_sources(path.read_text(encoding="utf-8")))
     }
 
     # 만드는 곳이 둘 이상이면 TC-1.3.17의 뒷부분이 가짜로 바꾼 함수를 거치지 않는 값을 놓친다.
-    assert importers == {"app/core/security.py"}
+    assert sources == {"app/core/security.py": {"secrets"}}

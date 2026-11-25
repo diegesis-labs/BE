@@ -406,6 +406,80 @@ def test_me_returns_user_and_role_from_allowlist(clean_db: str, client: TestClie
     assert me(client, token).json()["role"] == "user"
 
 
+# --- TC-1.4.9, TC-1.4.2를 GET /api/me로 (1차 리뷰 TST-3) --------------------
+#
+# tests/core/test_gate_integration.py는 관문을 테스트 전용 경로에 걸어 확인한다. 여기서는 TC가 정한
+# 대로 실제로 로그인한 뒤 GET /api/me를 부른다. /api/me가 관문 말고 다른 것을 거쳐 행을 고치거나
+# 만료를 보지 않으면 드러난다.
+
+
+def allowed_email_rows(url: str) -> list[dict[str, Any]]:
+    return execute(url, "SELECT * FROM allowed_emails ORDER BY email")
+
+
+def test_me_three_times_changes_no_row(clean_db: str, client: TestClient) -> None:
+    """TC-1.4.9. 로그인한 뒤 GET /api/me를 세 번 불러도 세 테이블의 모든 값이 그대로다."""
+    allow(clean_db, READER)
+    token = login(client)
+    before = (allowed_email_rows(clean_db), user_rows(clean_db), login_session_rows(clean_db))
+    assert [row["token_hash"] for row in before[2]] == [sha256(token)]
+
+    for _ in range(3):
+        response = me(client, token)
+        assert response.status_code == 200, response.text
+
+    assert (allowed_email_rows(clean_db), user_rows(clean_db), login_session_rows(clean_db)) == (
+        before
+    )
+
+
+def test_me_with_expired_login_session_is_not_authenticated(
+    clean_db: str, client: TestClient
+) -> None:
+    """TC-1.4.2. 실제로 로그인해 만든 로그인 상태의 만료 시각이 지나면 GET /api/me는 401이다."""
+    allow(clean_db, READER)
+    token = login(client)
+    assert me(client, token).status_code == 200
+    execute(
+        clean_db,
+        "UPDATE login_sessions SET expires_at = now() - interval '1 minute' "
+        "WHERE token_hash = :token_hash",
+        token_hash=sha256(token),
+    )
+
+    assert_error(me(client, token), 401, "NOT_AUTHENTICATED")
+
+
+# --- 실제 repository를 거치는 경로의 로그 (1차 리뷰 TST-4, TC-1.3.13) --------
+
+
+def test_login_relogin_me_and_logout_log_no_secret(
+    caplog: pytest.LogCaptureFixture, clean_db: str, client: TestClient
+) -> None:
+    """실제 repository와 트랜잭션을 거치는 동안 앱의 로그에 비밀값과 token_hash가 없다.
+
+    서버에서 LOG_LEVEL이 걸리는 것은 `app` 로거와 그 아래이므로(app/core/log_config.py), 그 로거를
+    DEBUG로 모은다. 테스트 클라이언트(httpx)의 로그는 요청 주소의 쿼리를 담으므로 모으지 않는다.
+    """
+    caplog.set_level(logging.DEBUG, logger="app")
+    # 이 캡처가 repository의 로거에서 DEBUG를 받는지 먼저 확인한다.
+    logging.getLogger("app.auth.repository").debug("canary-repository-debug")
+    assert "canary-repository-debug" in caplog.text
+    allow(clean_db, READER)
+
+    first = login(client)
+    second = login(client, session_cookie=first)
+    assert me(client, second).status_code == 200
+    assert me(client, first).status_code == 401
+    assert_logged_out(logout(client, second))
+
+    texts = [caplog.text, *(record.getMessage() for record in caplog.records)]
+    secrets = (first, sha256(first), second, sha256(second), CODE, STATE, NONCE, CODE_VERIFIER)
+    for secret in secrets:
+        for log_text in texts:
+            assert secret not in log_text, (secret, log_text)
+
+
 # --- TC-1.4.8 ---------------------------------------------------------------
 
 

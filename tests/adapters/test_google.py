@@ -13,6 +13,7 @@ TC-1.2.1 가운데 요청의 Host가 `localhost:8080`일 때의 확인은 로그
 
 import base64
 import json
+import logging
 import time
 from collections.abc import Callable
 from urllib.parse import parse_qsl, urlsplit
@@ -638,3 +639,56 @@ async def test_id_token_with_bad_nonce_sub_or_email_raises_login_failed_error(
 async def test_empty_expected_nonce_never_matches() -> None:
     # 빈 값끼리 같다고 판정하면 nonce의 확인이 무력해진다(ADR-027).
     await assert_login_fails(respond_with_claims(claims_with({"nonce": ""})), expected_nonce="")
+
+
+# --- 어댑터 자신의 로그 (1차 리뷰 TST-4, TC-1.3.13) -------------------------
+#
+# 예외의 메시지만이 아니라, 어댑터가 남기는 로그에도 code, code_verifier, 클라이언트 비밀값, nonce,
+# 토큰이 없어야 한다(E1 "못 박을 것"). 서버에서 LOG_LEVEL이 걸리는 것은 `app` 로거와 그 아래이므로
+# (app/core/log_config.py), 그 로거를 DEBUG로 모은다.
+
+ADAPTER_LOGGER = "app.adapters.google"
+
+
+def start_capturing_app_debug_logs(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.DEBUG, logger="app")
+    # 이 캡처가 어댑터 로거의 DEBUG를 받는지 먼저 확인한다. 받지 못하면 아래의 확인이 비어 버린다.
+    logging.getLogger(ADAPTER_LOGGER).debug("canary-adapter-debug")
+    assert "canary-adapter-debug" in caplog.text
+
+
+def assert_no_secret_in_logs(caplog: pytest.LogCaptureFixture, *extra: str) -> None:
+    texts = [caplog.text, *(record.getMessage() for record in caplog.records)]
+    for secret in (*SECRETS, *extra):
+        for text in texts:
+            assert secret not in text, (secret, text)
+
+
+async def test_successful_exchange_logs_no_secret(caplog: pytest.LogCaptureFixture) -> None:
+    id_token = encode_id_token(valid_claims())
+    provider = make_provider(respond(httpx.Response(200, json=token_body(id_token))))
+    start_capturing_app_debug_logs(caplog)
+
+    assert await exchange(provider) == VALID_IDENTITY
+
+    assert_no_secret_in_logs(caplog, id_token)
+
+
+@pytest.mark.parametrize(
+    "handler",
+    [
+        pytest.param(respond_with_claims(claims_with({"nonce": WRONG_NONCE})), id="bad-claim"),
+        pytest.param(respond(httpx.Response(400, json={"error": "invalid_grant"})), id="error"),
+        pytest.param(raise_error(httpx.ConnectError), id="transport"),
+    ],
+)
+async def test_failed_exchange_logs_no_secret(
+    caplog: pytest.LogCaptureFixture, handler: Handler
+) -> None:
+    provider = make_provider(handler)
+    start_capturing_app_debug_logs(caplog)
+
+    with pytest.raises(LoginFailedError):
+        await exchange(provider)
+
+    assert_no_secret_in_logs(caplog)
