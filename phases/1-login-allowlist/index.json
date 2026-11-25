@@ -37,7 +37,9 @@
     {
       "step": 4,
       "name": "google-adapter",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-11-25T14:46:36+0900",
+      "summary": "httpx를 개발 의존성에서 운영 의존성으로 옮기고(uv.lock의 --no-dev 목록에도 들어감), app/adapters/google.py에 GoogleIdentityProvider(from_settings는 FRONTEND_URL+CALLBACK_PATH로 돌아올 주소를 만듦, 인가 주소는 API.md 4.2절의 매개변수 여덟 개만이고 code_challenge는 S256, 토큰 교환은 상수 TOKEN_ENDPOINT에 폼 본문 여섯 값과 10초 타임아웃·리다이렉트 안 따름, ID 토큰은 서명 없이 payload를 base64url로 풀어 iss·aud(목록이면 우리 ID 하나뿐)·azp·exp(유한한 숫자)·nonce(secure_equals)·sub·email을 모두 확인, 클라이언트 ID가 비면 어떤 aud도 맞지 않음, email_verified는 true나 \"true\"만 True)를 두었다. 실패는 모두 LoginFailedError이며 메시지에 원인만 적고, 풀기 실패는 except 밖에서 내서 본문 바이트가 __context__에 남지 않는다. 테스트는 tests/adapters/test_google.py(TC-1.2.1~1.2.8, RFC 7636 부록 B의 값으로 code_challenge 비교, 실패마다 예외 체인 전체에 code·code_verifier·비밀값·nonce·응답 본문 표식·토큰이 없는지 확인, 89개)와 tests/infra/test_dependencies.py(7개)이며, 반증 조건을 포함한 틀린 구현 26가지를 잠시 넣어 모두 걸러지는 것을 확인했다"
     },
     {
       "step": 5,
