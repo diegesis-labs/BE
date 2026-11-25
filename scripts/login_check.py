@@ -566,6 +566,16 @@ class FrontendStandIn:
             raise RuntimeError("대역 서버가 아직 뜨지 않았다. start()를 먼저 부른다.")
         return self._server.server_port
 
+    def tick(self) -> int:
+        """기록의 순번을 매기는 카운터에서 순번 하나를 받는다.
+
+        이보다 먼저 받은 요청의 `received`는 이보다 작고, 뒤에 받은 요청의 `received`는 이보다 크다.
+        점검 2가 점검 1의 창이 보낸 요청을 가려내는 데 쓴다(4차 리뷰 COR-2).
+        """
+        if self._server is None:
+            raise RuntimeError("대역 서버가 아직 뜨지 않았다. start()를 먼저 부른다.")
+        return self._server.tick()
+
 
 # ---------------------------------------------------------------------------------------------
 # 점검 스크립트
@@ -1158,8 +1168,9 @@ def cookie_path_matches(request_path: str, cookie_path: str) -> bool:
 class CookieMismatch:
     """대역 서버가 센 쿠키와 브라우저가 요청에 붙인 쿠키가 다른 것 하나.
 
-    kind는 셋 가운데 하나다. missing은 붙여야 할 쿠키를 붙이지 않은 것, unexpected는 이번 점검에서
-    심지 않은 쿠키를 붙인 것, different는 붙인 쿠키의 값이 심은 값과 다른 것이다.
+    kind는 넷 가운데 하나다. missing은 붙여야 할 쿠키를 붙이지 않은 것, unexpected는 이번 점검에서
+    심지 않은 쿠키를 붙인 것, different는 붙인 쿠키의 값이 심은 값과 다른 것, kept는 이번 점검에서
+    지운 쿠키를 그 값 그대로 다시 붙인 것이다.
     """
 
     kind: str
@@ -1177,6 +1188,14 @@ class CookieMismatch:
                 f"브라우저: {self.request}에 이번 점검에서 심지 않은 {self.name} 쿠키를 붙였다. "
                 "새 게스트 창에서 시작했는지 확인한다."
             )
+        if self.kind == "kept":
+            # 새 게스트 창에서 다시 해도 같은 결과가 나오므로, 새 창이 아니라 지우는 Set-Cookie를
+            # 가리킨다(4차 리뷰 BEH-1).
+            return (
+                f"브라우저: {self.request}에 이번 점검에서 지운 {self.name} 쿠키를 다시 붙였다. "
+                "브라우저가 지우는 Set-Cookie를 받아들이지 않았으므로, 그 응답의 Set-Cookie "
+                "속성(Path, SameSite, Secure 등)을 확인한다."
+            )
         return (
             f"브라우저: {self.request}에 붙인 {self.name} 쿠키의 값이 대역 서버가 본 Set-Cookie의 "
             "값과 다르다."
@@ -1189,14 +1208,20 @@ class CookieJar:
     쿠키는 이름과 경로로 구별한다. 그래서 지우는 `Set-Cookie`는 이름과 경로가 모두 같을 때에만
     지운다. 이름만 보고 지우면, 경로가 틀려 실제 브라우저에서는 지워지지 않는 쿠키를 지워졌다고
     센다.
+
+    지운 쿠키는 그 이름과 경로, 값(의 SHA-256)을 기억한다. 브라우저가 지우는 `Set-Cookie`를
+    받아들이지 않고 그 쿠키를 다시 붙이면, 심지 않은 쿠키가 아니라 지운 쿠키로 보고하기
+    위해서다(4차 리뷰 BEH-1).
     """
 
     def __init__(self) -> None:
         self._held: dict[tuple[str, str], tuple[CookieState, datetime | None]] = {}
+        self._deleted: dict[tuple[str, str], str] = {}
 
     def copy(self) -> Self:
         jar = type(self)()
         jar._held = dict(self._held)
+        jar._deleted = dict(self._deleted)
         return jar
 
     def apply(self, exchange: Exchange) -> None:
@@ -1209,7 +1234,9 @@ class CookieJar:
                 expires_at = cookie.expires
             key = (cookie.name, path)
             if expires_at is not None and expires_at <= exchange.at:
-                self._held.pop(key, None)
+                removed = self._held.pop(key, None)
+                if removed is not None:
+                    self._deleted[key] = removed[0].value_sha256
                 continue
             held = CookieState(
                 name=cookie.name,
@@ -1246,25 +1273,47 @@ class CookieJar:
             elif cookie.value_sha256 not in values:
                 mismatches.append(CookieMismatch("different", cookie.name, request))
         expected_names = {cookie.name for cookie in expected}
-        mismatches += [
-            CookieMismatch("unexpected", sent.name, request)
-            for sent in exchange.sent
-            if sent.name not in expected_names
-        ]
+        for sent in exchange.sent:
+            if sent.name not in expected_names:
+                kind = "kept" if self._was_deleted(sent, request_path) else "unexpected"
+                mismatches.append(CookieMismatch(kind, sent.name, request))
         return mismatches
+
+    def _was_deleted(self, sent: SentCookie, request_path: str) -> bool:
+        """이 요청에 붙은 쿠키가, 경로가 맞아 이 요청에 붙었을 지운 쿠키와 이름과 값이 같은가."""
+        return any(
+            name == sent.name
+            and value_sha256 == sent.value_sha256
+            and cookie_path_matches(request_path, path)
+            for (name, path), value_sha256 in self._deleted.items()
+        )
 
 
 class BrowserWatch:
-    """한 점검 동안 대역 서버를 지난 요청과 응답으로 브라우저를 따라간다. 점검마다 새로 만든다."""
+    """한 점검 동안 대역 서버를 지난 요청과 응답으로 브라우저를 따라간다. 점검마다 새로 만든다.
 
-    def __init__(self, frontend_url: str) -> None:
+    since는 이 점검을 시작할 때 받아 둔 대역 서버의 순번(`FrontendStandIn.tick`)이다.
+    """
+
+    def __init__(self, frontend_url: str, *, since: int = 0) -> None:
         self._frontend_url = frontend_url
+        self._since = since
         self._jar = CookieJar()
         # 기록마다, 그 응답까지 반영한 셈. (기록의 순번, 셈)이다. 요청을 보낸 때의 셈을 찾는다.
         self._history: list[tuple[int, CookieJar]] = []
         self._url = ""
         # 같은 쿠키의 같은 어긋남은 요청마다 되풀이되므로, 시점마다 처음 본 것 하나만 보고한다.
         self._problems: dict[tuple[str, str], CookieMismatch] = {}
+
+    def belongs(self, exchange: Exchange) -> bool:
+        """이 점검에서 따라갈 요청인가.
+
+        이 점검을 시작하기 전에 대역 서버가 받은 요청은 앞 점검의 창이 보낸 것이다. 그 응답이 늦게
+        끝나 이 점검이 시작한 뒤에 기록되어도, 셈에 넣거나 기다리는 요청으로 쓰지 않는다. 이 점검의
+        빈 셈과 견주면 심지 않은 쿠키로 거짓 보고된다(4차 리뷰 COR-2). 순번이 없는 기록은 이 점검의
+        것으로 본다.
+        """
+        return exchange.received is None or exchange.received > self._since
 
     def observe(self, exchange: Exchange) -> None:
         # 쿠키는 게스트 창의 화면 이동과 /api 요청에서만 대조한다. 대역 서버에는 다른 창에 남은 탭이
@@ -1825,7 +1874,9 @@ async def _wait_for(
 ) -> Exchange:
     """wanted에 맞는 요청이 대역 서버를 지나갈 때까지 기다린다.
 
-    그사이 지난 요청과 응답도 모두 watch에 넣는다. 쿠키의 셈은 빠짐없이 보아야 맞는다.
+    그사이 지난 요청과 응답도 모두 watch에 넣는다. 쿠키의 셈은 빠짐없이 보아야 맞는다. 다만 이
+    점검을 시작하기 전에 대역 서버가 받은 요청(`BrowserWatch.belongs`)은 넣지도, 기다리는 요청으로
+    쓰지도 않는다.
     """
     loop = asyncio.get_running_loop()
     deadline = loop.time() + LOGIN_WAIT_SECONDS
@@ -1841,6 +1892,8 @@ async def _wait_for(
                 "터미널의 안내대로 했는지 확인하고 다시 실행한다. Google이 로그인을 막았다면 그 "
                 "화면의 안내를 사람이 확인한다."
             ) from None
+        if not watch.belongs(exchange):
+            continue
         watch.observe(exchange)
         if wanted(exchange):
             return exchange
@@ -1867,13 +1920,6 @@ def _report(title: str, snapshot: Snapshot, args: Args) -> None:
 
 def _tagged(title: str, mismatches: list[str]) -> list[str]:
     return [f"[{title}] {mismatch}" for mismatch in mismatches]
-
-
-async def _discard_pending(exchanges: asyncio.Queue[Exchange]) -> None:
-    """큐에 남은 기록을 버린다. 대역 서버의 스레드가 이미 넘긴 것까지 받은 다음에 버린다."""
-    await asyncio.sleep(0)
-    while not exchanges.empty():
-        exchanges.get_nowait()
 
 
 async def _check_allowed(
@@ -1958,19 +2004,22 @@ async def _check_allowed(
 
 
 async def _check_denied(
-    exchanges: asyncio.Queue[Exchange], settings: CheckSettings, args: Args, found: list[str]
+    exchanges: asyncio.Queue[Exchange],
+    settings: CheckSettings,
+    args: Args,
+    found: list[str],
+    *,
+    since: int,
 ) -> None:
     """점검 2: 허용 목록 밖 계정 B의 로그인 시도 (TC-1.7.4). 표와 다른 것은 found에 더한다.
 
-    끝내지 못하면, 그 시점에 이미 본 쿠키의 어긋남도 found에 더한 뒤 예외를 그대로 낸다.
+    since는 점검 2를 시작할 때 받아 둔 대역 서버의 순번이다. 끝내지 못하면, 그 시점에 이미 본
+    쿠키의 어긋남도 found에 더한 뒤 예외를 그대로 낸다.
     """
     email, frontend = args.denied_email, settings.frontend_url
-    # 새 게스트 창은 쿠키가 없는 브라우저이므로 새로 따라간다.
-    watch = BrowserWatch(frontend)
-    # 점검 1의 창이 남긴 요청(로그아웃을 두 번 누른 것 등)은 점검 2의 새 창이 보낸 것이 아니다.
-    # 그것을 점검 2의 대상으로 쓰면 새 창을 열기도 전에 판정하고 다음 안내로 넘어간다(3차 리뷰
-    # COR-1).
-    await _discard_pending(exchanges)
+    # 새 게스트 창은 쿠키가 없는 브라우저이므로 새로 따라간다. 점검 1의 창이 since 전에 보낸
+    # 요청(로그아웃을 겹쳐 누른 것 등)은, 응답이 늦게 끝나 지금 뒤에 기록되어도 보지 않는다.
+    watch = BrowserWatch(frontend, since=since)
 
     title = "점검 2 · 로그인 전"
     try:
@@ -1979,6 +2028,10 @@ async def _check_denied(
             f"열려 있는 게스트 창을 모두 닫고, 새 게스트 창에서 {frontend}/ 를 연 뒤 "
             "화면의 [내 정보 확인]을 누르세요.",
         )
+        # 사람이 점검 1의 창에서 늦게 누른 버튼의 요청은 since 뒤에도 온다. 그것을 점검 2의 대상으로
+        # 쓰면 새 창을 열기도 전에 판정하고 다음 안내로 넘어간다. 그 요청은 화면 이동이 아니므로, 새
+        # 창이 화면을 연 뒤에 온 GET /api/me로 판정한다(4차 리뷰 COR-1).
+        await _wait_for(exchanges, watch, _is_page, f"새 게스트 창이 연 화면({frontend}/)")
         me = await _wait_for(exchanges, watch, _is_me, f"GET {ME_PATH}")
         before = await _snapshot(settings, args, watch.state(me, me=_fetched(me)))
         _report(title, before, args)
@@ -2038,7 +2091,7 @@ async def run_checks(settings: CheckSettings, args: Args) -> list[str]:
     found: list[str] = []
     try:
         await _check_allowed(exchanges, settings, args, found)
-        await _check_denied(exchanges, settings, args, found)
+        await _check_denied(exchanges, settings, args, found, since=stand_in.tick())
     except CheckAbortedError as error:
         raise CheckAbortedError(str(error), found=found) from None
     except DATABASE_ERRORS as error:
