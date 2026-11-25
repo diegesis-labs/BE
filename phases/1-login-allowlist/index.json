@@ -45,7 +45,9 @@
     {
       "step": 5,
       "name": "auth-service",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-11-25T15:00:01+0900",
+      "summary": "app/auth/service.py에 AuthStore(Protocol, AuthRepository와 FakeAuthStore가 구조적으로 만족함을 pyright가 확인)·LoginStart·LoginSucceeded·LoginRejected(NOT_ALLOWED/LOGIN_FAILED 둘뿐, 역할은 담지 않음)와 AuthService를 두었다. start_login은 security.new_token()을 모듈을 거쳐 세 번 불러 state.nonce.code_verifier 쿠키 값과 인가 주소를 만들고, complete_login은 API.md 4.2절의 순서(error 쿼리 → state 쿠키가 정확히 세 부분 → secure_equals로 state 비교 → code 있음 → exchange_code(쿠키의 셋째를 code_verifier, 둘째를 nonce로) → email_verified → 이메일 소문자화 → 허용 목록 → 이메일과 google_sub 중 하나만 같은 행이 있으면 거부)를 따르며, 실패·거부 때에는 저장소의 쓰기를 하나도 부르지 않고 원인만 로그에 남긴다(비밀값과 error 쿼리 값은 남기지 않고 LoginFailedError의 메시지와 충돌한 user_id만 남김). 성공하면 사용자를 만들거나 이름을 갱신하고, 요청에 붙은 쿠키의 행 하나와 그 사용자의 만료된 행을 지운 뒤 hash_token한 새 쿠키 값과 지금+TTL을 저장한다(커밋은 get_db_session의 몫). logout은 쿠키가 있으면 그 해시의 행만 지운다. tests/auth/fakes.py에 FakeIdentityProvider(받은 인자 기록, identity·error를 바꿀 수 있음)와 FakeAuthStore(쓰기 기록, 소문자·고유·FK 제약 흉내, find_active_login은 아직 없음)를 두었다. 테스트는 tests/auth/test_service.py(unit 61개: TC-1.3.3~1.3.6, 1.3.12~1.3.14, 1.3.17의 service 부분, 1.3.18, 로그, import AST 검사와 그 검출기 검증)와 tests/auth/test_service_integration.py(integration 8개: TC-1.3.1, 1.3.2, 1.3.7, 1.3.10, 1.3.14, 1.3.15, 1.3.16)이며, 반증 조건을 포함한 틀린 구현 27가지를 잠시 넣어 모두 걸러지는 것을 확인했다"
     },
     {
       "step": 6,
