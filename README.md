@@ -32,7 +32,7 @@ docker compose up --build -d --wait   # 이미지를 빌드하고 데이터베�
 | 주소 | 보이는 것 |
 | --- | --- |
 | http://localhost:8080/api/health | 헬스체크의 응답입니다. `{"status":"ok"}`가 보이면 서버가 떠 있는 것입니다. |
-| http://localhost:8080/api/docs | API 문서 화면입니다. 지금 있는 엔드포인트를 보고 직접 요청을 보내 볼 수 있습니다. |
+| http://localhost:8080/api/docs | API 문서 화면입니다. 지금 있는 엔드포인트를 보고 직접 요청을 보내 볼 수 있습니다. 다만 로그아웃처럼 상태를 바꾸는 요청은 출처 확인 때문에 이 주소의 화면에서 보내면 `403 ORIGIN_MISMATCH`로 거절됩니다([API.md 2.4절](docs/API.md#24-상태를-바꾸는-요청의-출처-확인)). 그런 요청은 프론트엔드의 개발 서버가 백엔드로 넘겨 주는 주소의 화면(http://localhost:5173/api/docs)에서 보냅니다. |
 
 그 밖에 자주 쓰는 명령은 다음과 같습니다.
 
@@ -217,7 +217,7 @@ Python, FastAPI, PostgreSQL(pgvector), Docker를 씁니다. 각 기술을 고른
 app/            # 서버 코드. 기능별로 폴더를 나눈다.
 migrations/     # 데이터베이스 구조 변경 이력
 tests/          # 테스트
-scripts/        # 검사 스크립트와 harness
+scripts/        # 검사 스크립트, harness, 로컬 로그인 점검 스크립트
 docs/           # 문서
 phases/         # harness가 실행한 작업의 기록
 .claude/        # Claude Code의 설정, 명령, 스킬

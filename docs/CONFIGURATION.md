@@ -45,7 +45,7 @@ docker compose로 서버와 데이터베이스를 함께 띄울 때에는 `.env`
 
 ## 3. 설정값 목록
 
-"필수"라고 적힌 값은 기본값이 없어서, 채우지 않으면 서버가 시작되지 않습니다.
+"필수"라고 적힌 값은 기본값이 없어서, 그 이름의 변수가 아예 없으면 서버가 시작되지 않습니다. 빈 값을 받는지는 값마다 적습니다.
 
 ### 3.1 서버
 
@@ -65,8 +65,8 @@ docker compose로 서버와 데이터베이스를 함께 띄울 때에는 `.env`
 
 | 이름 | 뜻 | 기본값 | 예시 |
 | --- | --- | --- | --- |
-| `GOOGLE_CLIENT_ID` | Google 로그인을 위해 Google Cloud 콘솔에서 발급받은 클라이언트 ID입니다. | 필수 | `1234567890-abc.apps.googleusercontent.com` |
-| `GOOGLE_CLIENT_SECRET` | 위 클라이언트 ID와 짝을 이루는 비밀값입니다. | 필수 | (비밀값이므로 예시를 적지 않습니다) |
+| `GOOGLE_CLIENT_ID` | Google 로그인을 위해 Google Cloud 콘솔에서 발급받은 클라이언트 ID입니다. 빈 값도 받으며, 빈 값으로 뜬 서버는 Google 로그인만 되지 않습니다(2절). | 필수 | `1234567890-abc.apps.googleusercontent.com` |
+| `GOOGLE_CLIENT_SECRET` | 위 클라이언트 ID와 짝을 이루는 비밀값입니다. 빈 값도 받으며, 빈 값으로 뜬 서버는 Google 로그인만 되지 않습니다(2절). | 필수 | (비밀값이므로 예시를 적지 않습니다) |
 | `LOGIN_SESSION_TTL_HOURS` | 로그인 상태가 유지되는 시간입니다. 로그인한 때부터 세며, 로그인 상태를 쓰는 동안에도 늘어나지 않습니다. 이 시간이 지나면 다시 로그인해야 합니다. | `336` (14일) | `720` |
 | `LOGIN_COOKIE_NAME` | 로그인 상태를 식별하는 쿠키의 이름입니다. | `diegesis_session` | `diegesis_session` |
 
