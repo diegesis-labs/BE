@@ -548,6 +548,10 @@ def world(monkeypatch: pytest.MonkeyPatch) -> FakeWorld:
     monkeypatch.setattr(login_check, "read_state", world.read_state)
     monkeypatch.setattr(login_check, "_ask", world.ask)
     monkeypatch.setattr(login_check, "connect_read_only", no_database)
+    # 사람의 시간은 가짜 시계로 흐르고 가짜 사람은 곧바로 움직이므로, 기다리는 시간을 줄여도 판정은
+    # 같다. 층이 기다리는 요청을 알아보지 못하게 고장 나면, 테스트가 5분씩 멈추지 않고 이 시간 뒤에
+    # 4로 끝나 빨개진다(4차 리뷰 TST-5).
+    monkeypatch.setattr(login_check, "LOGIN_WAIT_SECONDS", 2)
     return world
 
 
