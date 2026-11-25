@@ -5,6 +5,10 @@
 마이그레이션 환경(migrations/env.py)이 부를 때 만든다.
 """
 
+from collections.abc import AsyncIterator
+from typing import Annotated
+
+from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -27,3 +31,11 @@ def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSessi
     # 커밋한 뒤에도 객체의 값을 읽을 수 있게 한다. 비동기 세션에서는 만료된 속성을 읽을 때
     # 암묵적으로 질의를 보낼 수 없기 때문이다.
     return async_sessionmaker(engine, expire_on_commit=False)
+
+
+async def get_db_session(request: Request) -> AsyncIterator[AsyncSession]:
+    raise NotImplementedError
+    yield
+
+
+DbSession = Annotated[AsyncSession, Depends(get_db_session, scope="function")]

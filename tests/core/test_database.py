@@ -11,13 +11,19 @@ from pathlib import Path
 import pytest
 import yaml
 from alembic import command
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import Column, MetaData, String, Table, select, text
+from sqlalchemy.ext.asyncio import AsyncSession
 from testcontainers.community.postgres import PostgresContainer
 
 from app.core.config import get_settings
-from app.core.database import create_engine, create_session_factory
+from app.core.database import DbSession, create_engine, create_session_factory
+from app.core.errors import AppError
+from app.main import create_app
 from tests.support.postgres import alembic_config
+from tests.support.settings import TEST_FRONTEND_URL
 
 pytestmark = pytest.mark.integration
 
@@ -186,3 +192,137 @@ def test_models_match_migrations(database_url: str) -> None:
     Alembic 명령을 부를 수 없다.
     """
     command.check(alembic_config(database_url))
+
+
+# --- 요청마다의 세션과 트랜잭션 (get_db_session) ----------------------------
+#
+# 아래 테스트는 create_app()으로 만든 앱에 테스트 안에서만 쓰는 경로를 붙여서 확인한다. 경로는
+# DbSession으로 세션을 받는다. 쓰는 요청에는 프론트엔드와 같은 Origin을 붙인다. 실제 프론트엔드의
+# 요청과 같은 모양으로 보내기 위해서다(docs/API.md 2.4절).
+
+TEST_ROUTE = "/test/database"
+WRITTEN_EMAIL = "written@example.com"
+SAME_ORIGIN = {"Origin": TEST_FRONTEND_URL}
+
+
+def app_with_writing_route(failure: Exception | None = None) -> FastAPI:
+    """allowed_emails에 한 행을 넣는 경로를 붙인 앱.
+
+    failure를 주면 행을 넣은 뒤에 그 예외를 낸다.
+    """
+    app = create_app()
+
+    @app.post(TEST_ROUTE)
+    async def write(session: DbSession) -> None:
+        await session.execute(
+            text("INSERT INTO allowed_emails (email, role) VALUES (:email, 'user')"),
+            {"email": WRITTEN_EMAIL},
+        )
+        if failure is not None:
+            raise failure
+
+    return app
+
+
+def app_with_reading_route() -> FastAPI:
+    """allowed_emails의 행 수를 읽는 경로를 붙인 앱."""
+    app = create_app()
+
+    @app.get(TEST_ROUTE)
+    async def read(session: DbSession) -> int:
+        return int(await session.scalar(text("SELECT count(*) FROM allowed_emails")) or 0)
+
+    return app
+
+
+async def allowed_emails(url: str) -> list[str]:
+    """allowed_emails에 남은 이메일. 앱과 다른 엔진과 연결로 읽는다."""
+    engine = create_engine(url)
+    try:
+        async with engine.connect() as connection:
+            rows = await connection.execute(text("SELECT email FROM allowed_emails"))
+            return list(rows.scalars())
+    finally:
+        await engine.dispose()
+
+
+def test_db_session_commits_when_route_finishes(clean_db: str) -> None:
+    with TestClient(app_with_writing_route()) as client:
+        response = client.post(TEST_ROUTE, headers=SAME_ORIGIN)
+
+    assert response.status_code == 200
+    assert asyncio.run(allowed_emails(clean_db)) == [WRITTEN_EMAIL]
+
+
+@pytest.mark.parametrize(
+    ("failure", "status_code"),
+    [
+        (RuntimeError("경로에서 예상하지 못한 문제"), 500),
+        # 정해진 에러 응답으로 끝나는 경우에도 그 전에 쓴 것은 남지 않는다.
+        (AppError(403, "NOT_ALLOWED", "허용 목록에 없는 계정입니다."), 403),
+    ],
+)
+def test_db_session_rolls_back_when_route_raises(
+    clean_db: str, failure: Exception, status_code: int
+) -> None:
+    with TestClient(app_with_writing_route(failure), raise_server_exceptions=False) as client:
+        response = client.post(TEST_ROUTE, headers=SAME_ORIGIN)
+
+    assert response.status_code == status_code
+    assert asyncio.run(allowed_emails(clean_db)) == []
+
+
+def test_db_session_commit_failure_is_500(clean_db: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """커밋은 응답을 보내기 전에 끝난다. 그래서 커밋이 실패하면 클라이언트는 500을 받는다.
+
+    FastAPI의 yield 의존성은 기본값(scope="request")에서 응답을 보낸 뒤에 정리되므로, 그렇게 두면
+    커밋이 실패해도 클라이언트는 이미 200을 받는다.
+    """
+
+    async def failing_commit(self: AsyncSession) -> None:
+        raise RuntimeError("커밋 실패")
+
+    monkeypatch.setattr(AsyncSession, "commit", failing_commit)
+
+    with TestClient(app_with_writing_route(), raise_server_exceptions=False) as client:
+        response = client.post(TEST_ROUTE, headers=SAME_ORIGIN)
+
+    assert response.status_code == 500
+    assert response.json()["code"] == "INTERNAL_ERROR"
+    assert asyncio.run(allowed_emails(clean_db)) == []
+
+
+def test_each_app_has_its_own_engine(clean_db: str) -> None:
+    """앱 두 개를 차례로 만들어 번갈아 요청해도 모두 성공한다.
+
+    TestClient는 앱마다 다른 스레드의 이벤트 루프에서 앱을 돌린다. 엔진을 모듈 전역에 하나만 두면,
+    앞의 앱의 이벤트 루프에서 만든 연결을 뒤의 앱이 다시 써서 asyncpg가 실패한다. 두 앱을 함께
+    띄워 둔 채로 번갈아 요청하므로, 앱이 내려갈 때 전역 엔진을 정리하는 구현도 걸러 낸다.
+    """
+    with (
+        TestClient(app_with_reading_route(), raise_server_exceptions=False) as first,
+        TestClient(app_with_reading_route(), raise_server_exceptions=False) as second,
+    ):
+        responses = [client.get(TEST_ROUTE) for client in (first, second, first, second)]
+
+    assert [response.status_code for response in responses] == [200, 200, 200, 200]
+    assert [response.json() for response in responses] == [0, 0, 0, 0]
+
+
+def test_db_session_does_not_connect_until_first_query(app_env: None) -> None:
+    """세션을 받기만 하고 질의하지 않는 경로는 데이터베이스에 닿지 않는다.
+
+    `app_env`의 DATABASE_URL은 닿지 않는 주소다. 세션을 만들거나 커밋할 때 접속하면 500이 난다.
+    이후의 관문은 쿠키가 없으면 데이터베이스에 닿지 않고 401을 내야 한다. 이 테스트는 컨테이너를
+    쓰지 않지만, get_db_session의 테스트를 한곳에 두기 위해 이 파일에 둔다.
+    """
+    app = create_app()
+
+    @app.get(TEST_ROUTE)
+    async def untouched(session: DbSession) -> None:
+        return None
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get(TEST_ROUTE)
+
+    assert response.status_code == 200
