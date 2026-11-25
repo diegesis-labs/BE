@@ -14,6 +14,7 @@ state, nonce, code_verifier, code, 쿠키 값은 서로 다르고 로그의 문�
 import ast
 import logging
 import re
+import sys
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -604,11 +605,14 @@ async def test_success_does_not_log_tokens(
 
 # service는 특정 기술의 이름을 알지 못한다. Google은 IdentityProvider 포트를 거친다
 # (docs/ARCHITECTURE.md 8절, E1 "못 박을 것").
-FORBIDDEN_MODULES = ("fastapi", "sqlalchemy", "httpx", "app.adapters")
+#
+# 그래서 service가 가져와도 되는 것을 허용 목록으로 둔다. 표준 라이브러리와, app/에서는 app/core/의
+# security와 ports뿐이다. 그 밖의 것은 모두 특정 기술(fastapi, sqlalchemy, httpx, asyncpg,
+# starlette, pydantic 같은 것)이거나 어댑터이거나 저장소의 구현이다. 금지할 이름을 늘어놓는 방식은
+# 목록에 없는 기술을 가져와도 초록이 된다(3차 리뷰 ARC-1).
 SERVICE_PACKAGE = "app.auth"
-# service가 app/에서 가져와도 되는 것은 app/core/의 security와 ports뿐이다. 저장소의 레코드도
-# 포트(app/core/ports.py)에서 가져온다. repository에서 가져오면 service가 포트가 아니라 저장소의
-# 구현에 기대게 된다(docs/ARCHITECTURE.md 8절, ADR-029).
+# 저장소의 레코드도 포트(app/core/ports.py)에서 가져온다. repository에서 가져오면 service가 포트가
+# 아니라 저장소의 구현에 기대게 된다(docs/ARCHITECTURE.md 8절, ADR-029).
 
 
 # 문자열로 모듈을 가져오는 함수(2차 리뷰 ARC-1). 인자가 문자열 상수가 아니면 무엇을 가져오는지
@@ -688,15 +692,20 @@ def imported_names(source: str, package: str = SERVICE_PACKAGE) -> set[str]:
     return found
 
 
-def is_forbidden(name: str) -> bool:
-    """특정 기술이나 어댑터의 이름인가. 무엇을 가져오는지 모르는 동적 import도 금지로 본다."""
-    if name == UNKNOWN_DYNAMIC_IMPORT:
-        return True
-    return any(name == module or name.startswith(f"{module}.") for module in FORBIDDEN_MODULES)
+def is_standard_library(name: str) -> bool:
+    return name.split(".")[0] in sys.stdlib_module_names
 
 
 def is_allowed_app_import(name: str) -> bool:
     return name in {"app.core.security", "app.core.ports"} or name.startswith("app.core.ports.")
+
+
+def is_forbidden(name: str) -> bool:
+    """service가 가져오면 안 되는 이름인가. 허용 목록(표준 라이브러리, app.core.security,
+    app.core.ports)에 없으면 모두 금지다. 무엇을 가져오는지 모르는 동적 import도 금지로 본다."""
+    if name == UNKNOWN_DYNAMIC_IMPORT:
+        return True
+    return not (is_standard_library(name) or is_allowed_app_import(name))
 
 
 @pytest.mark.parametrize(
@@ -717,8 +726,17 @@ def is_allowed_app_import(name: str) -> bool:
         ("from app import adapters", {"app.adapters"}),
         ("from ..adapters import google", {"app.adapters.google"}),
         ("from app.core import security", set()),
-        ("import httpx_mock, fastapiish", set()),
-        ("from app.adaptersx import thing", set()),
+        ("from app.core.ports import AuthStore, UserRecord", set()),
+        ("import logging\nfrom datetime import UTC, datetime", set()),
+        # 허용 목록이다. 목록에 없는 기술은 이름이 무엇이든 금지다(3차 리뷰 ARC-1).
+        ("import asyncpg", {"asyncpg"}),
+        ("from starlette.requests import Request", {"starlette.requests.Request"}),
+        ("import uvicorn", {"uvicorn"}),
+        ("from pydantic import BaseModel", {"pydantic.BaseModel"}),
+        ("import httpx_mock, fastapiish", {"httpx_mock", "fastapiish"}),
+        ("from app.adaptersx import thing", {"app.adaptersx.thing"}),
+        ("from app.auth.repository import AuthRepository", {"app.auth.repository.AuthRepository"}),
+        ("from app.core.config import get_settings", {"app.core.config.get_settings"}),
         # 문자열로 가져오기(2차 리뷰 ARC-1)
         ("import importlib\ndef f():\n    return importlib.import_module('httpx')", {"httpx"}),
         ("import importlib as il\nil.import_module('fastapi')", {"fastapi"}),
