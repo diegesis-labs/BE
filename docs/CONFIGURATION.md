@@ -39,7 +39,9 @@ flowchart LR
 cp .env.example .env
 ```
 
-다만 docker compose로 서버와 데이터베이스를 함께 띄울 때에는 `.env`가 필요하지 않습니다. compose 파일이 필요한 값을 컨테이너에 직접 넣어 주기 때문입니다. `.env`는 서버를 compose 밖에서 직접 실행할 때 씁니다.
+docker compose로 서버와 데이터베이스를 함께 띄울 때에는 `.env`의 값 가운데 `FRONTEND_URL`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` 세 값만 서버에 들어갑니다. compose는 `.env`를 `compose.yaml`에 적힌 `${...}`를 채우는 데에만 읽고, `compose.yaml`은 서버의 설정값 가운데 이 세 값만 그렇게 받기 때문입니다. `DATABASE_URL` 같은 나머지 값은 `.env`에 있더라도 서버에 들어가지 않습니다. 개발자의 `.env`에 든 `DATABASE_URL`은 compose 밖에서 실행하는 서버를 위해 `localhost`를 가리키는데, 컨테이너 안에서 `localhost`는 그 컨테이너 자신입니다. 그래서 이 주소가 `compose.yaml`이 넣어 주는 컨테이너 안의 주소(`db` 서비스)를 덮어쓰면 서버가 데이터베이스에 닿지 못합니다.
+
+`.env`가 없거나 세 값이 비어 있어도 서버는 뜹니다. 이때 `FRONTEND_URL`은 `http://localhost:5173`이 되고, Google의 두 값은 비어 있으므로 Google 로그인만 되지 않습니다. `.env`의 나머지 값은 서버를 compose 밖에서 직접 실행할 때 쓰입니다.
 
 ## 3. 설정값 목록
 

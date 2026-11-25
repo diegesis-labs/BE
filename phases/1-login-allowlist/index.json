@@ -101,7 +101,9 @@
     {
       "step": 12,
       "name": "readme",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-11-25T16:41:17+0900",
+      "summary": "tests/infra/test_readme_allowlist.py(TC-1.6.1)는 README의 '허용 목록에 사람 넣고 빼기' 절을 제목으로 찾고(코드 블록 안의 # 줄은 제목으로 보지 않음, 그 제목이 0개나 2개면 ValueError) 그 절의 sql 블록을 옮겨 적지 않고 읽어(하나도 없으면 ValueError) 블록마다 asyncpg의 인자 없는 execute로 BEGIN·COMMIT까지 적힌 그대로 순서대로 실행한다. reader·other의 users 행과 로그인 상태를 넣고 실행한 뒤 다른 연결로 allowed_emails가 정확히 tester1·tester2(user)이고 users가 그대로이며 login_sessions에는 other의 행만 그대로 남았는지, 서버가 WARNING을 보내지 않았는지 확인하고, 경고 검출기는 트랜잭션 밖의 COMMIT으로 검증한다(integration 2개, 추출 함수의 unit 8개). 반증 조건(테이블·컬럼 이름 변경, 로그인 상태 DELETE 삭제, 제목 변경, sql 블록 삭제와 언어 표시 변경)에 ROLLBACK, COMMIT만 삭제, BEGIN만 삭제, 로그인 상태 전부 삭제, users 행 삭제, 역할 오기를 더한 12가지로 README를 잠시 바꿔 모두 빨개지는 것을 확인했다(BEGIN과 COMMIT을 함께 지우면 한 번에 보내는 실행이 암묵적 트랜잭션이 되어 잡지 못한다). README의 허용 목록 SQL은 고치지 않았다. README는 '현재 상태'(헬스체크, Google 로그인, 로그아웃, GET /api/me, 허용 목록, 책과 선곡은 없음), 허용 목록 절의 'Epic 1 전에는 동작하지 않는다' 문장 삭제, '알아 둘 것'의 .env 항목(compose는 세 값만 넘기고 .env가 없으면 Google 로그인만 안 됨, CONFIGURATION.md 2절 링크), 새 절 '로컬에서 Google 로그인 점검하기'(준비할 것, .env → compose → A를 user로 → playwright install chromium → login_check.py의 다섯 단계와 명령마다의 설명, 결과를 읽는 법과 testcase.md 표 링크, 브라우저 전 확인과 맞추는 SQL)를 고쳤고, CONFIGURATION.md 2절은 compose가 .env에서 세 값만 넘기고 DATABASE_URL 같은 나머지는 넘기지 않는 것과 그 이유(.env의 localhost 주소가 컨테이너 안의 주소를 덮어쓰면 안 됨)로 고쳤다. 확인: --help의 인자가 README와 같고, .env 없이 compose로 띄워 /api/health 200과 로그인 시작의 client_id가 빈 것, README의 psql -c 한 줄이 두 번(INSERT와 ON CONFLICT) 도는 것, login_check.py가 브라우저 없이 3으로 끝나는 것을 본 뒤 넣은 행을 지우고 docker compose down으로 내렸다. 실제 Google 계정으로 하는 점검은 실행하지 못했음, 사람이 MANUAL 점검에서 실행. ADR·DECISIONS·API는 고칠 곳이 없었다. 발견한 것: README '폴더 구조'의 scripts/ 설명에 로컬 로그인 점검 스크립트가 빠져 있다(범위 밖이라 두었다)."
     }
   ],
   "created_at": "2026-11-25T14:00:02+0900"

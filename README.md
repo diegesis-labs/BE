@@ -4,7 +4,7 @@ Diegesis는 소설의 분위기에 맞는 음악을 재생해 주는 전자책 �
 
 ## 현재 상태
 
-지금은 1차 마일스톤(MVP)을 위한 설계 문서, 개발 도구와 작업 절차, 그리고 서버의 뼈대가 준비되어 있습니다. 서버와 데이터베이스를 로컬에서 띄울 수 있지만, 서버는 헬스체크에만 응답합니다. 로그인, 책, 선곡 같은 기능은 아직 구현하지 않았습니다.
+지금은 1차 마일스톤(MVP)을 위한 설계 문서, 개발 도구와 작업 절차, 그리고 로그인까지 갖춘 서버가 준비되어 있습니다. 서버와 데이터베이스를 로컬에서 띄울 수 있고, 서버에는 헬스체크, Google 로그인, 로그아웃, 내 정보 조회(`GET /api/me`)가 있습니다. 로그인은 허용 목록에 있는 사람만 할 수 있습니다. 책, 선곡 같은 기능은 아직 구현하지 않았습니다.
 
 ## 개발 환경
 
@@ -73,13 +73,13 @@ $env:API_PORT="8081"; $env:DB_PORT="5433"; docker compose up --build -d --wait  
 
 ### 알아 둘 것
 
-- **`.env` 파일이 필요 없습니다.** 서버가 데이터베이스에 접속하는 주소는 `compose.yaml`이 컨테이너에 직접 넘기며, `.env`가 있더라도 그 안의 설정값은 컨테이너에 들어가지 않습니다. `.env`는 서버를 compose 밖에서 직접 실행할 때 쓰며, 설정값의 목록과 뜻은 [docs/CONFIGURATION.md](docs/CONFIGURATION.md#2-처음-시작할-때)에 있습니다.
+- **compose는 `.env`에서 `FRONTEND_URL`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` 세 값만 서버에 넘깁니다.** `DATABASE_URL` 같은 나머지 값은 넘기지 않으므로, `.env`가 없어도 서버는 뜨지만 Google 로그인은 되지 않습니다. 자세한 것은 [docs/CONFIGURATION.md](docs/CONFIGURATION.md#2-처음-시작할-때) 2절에 있습니다.
 - **이미지는 compose로만 빌드합니다.** `docker build`를 직접 쓰지 않습니다. `docker build`로 만든 이미지가 로컬 이미지 저장소에 실리는지는 각자의 Docker builder 설정에 따라 다르지만, compose는 그 설정과 관계없이 이미지를 싣기 때문입니다([docs/ADR.md](docs/ADR.md#adr-015-로컬-실행-구성과-헬스체크)의 ADR-015). 자세한 규칙은 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#1-개발-환경-준비) 1절에 있습니다.
 - **CPU 아키텍처에 맞춰 따로 설정할 것은 없습니다.** compose는 각자의 컴퓨터에서 그 컴퓨터의 CPU 아키텍처로 이미지를 빌드하므로, Apple Silicon Mac과 Windows에서 같은 명령을 그대로 쓰면 됩니다. Docker Hub에는 CI가 `linux/amd64` 이미지만 올리지만, 그 이미지는 배포 환경에서 받는 것이므로 로컬 개발에는 받지 않습니다([docs/ADR.md](docs/ADR.md#adr-014-ci-검사와-컨테이너-이미지)의 ADR-014).
 
 ## 허용 목록에 사람 넣고 빼기
 
-서비스는 허용 목록에 이메일이 있는 사람만 쓸 수 있습니다. 허용 목록은 데이터베이스의 `allowed_emails` 테이블이며, 관리 API가 없으므로 아래 SQL로 직접 넣고 뺍니다([docs/ADR.md](docs/ADR.md#adr-024-허용-목록의-관리와-확인)의 ADR-024). 바꾼 내용은 서버를 다시 띄우지 않아도 다음 요청부터 적용됩니다. 이 테이블은 로그인 기능(Epic 1)과 함께 만들어지므로, 그 전에는 아래 SQL이 동작하지 않습니다.
+서비스는 허용 목록에 이메일이 있는 사람만 쓸 수 있습니다. 허용 목록은 데이터베이스의 `allowed_emails` 테이블이며, 관리 API가 없으므로 아래 SQL로 직접 넣고 뺍니다([docs/ADR.md](docs/ADR.md#adr-024-허용-목록의-관리와-확인)의 ADR-024). 바꾼 내용은 서버를 다시 띄우지 않아도 다음 요청부터 적용됩니다.
 
 로컬에서는 compose로 띄운 데이터베이스에 아래 명령으로 접속합니다. 접속한 뒤 SQL을 입력하고, `\q`로 빠져나옵니다.
 
@@ -125,6 +125,63 @@ SELECT email, role, created_at FROM allowed_emails ORDER BY created_at;
 허용 목록에서 뺐다가 다시 넣은 사람은 다시 로그인해야 합니다. 백엔드는 그 사람이 허용 목록에 들어간 시각보다 먼저 만든 로그인 상태를 받아들이지 않기 때문입니다([docs/ADR.md](docs/ADR.md#adr-027-로그인-흐름과-로그인-상태의-보안-보강)의 ADR-027). 역할만 바꾸는 SQL은 로그인 상태에 영향을 주지 않습니다.
 
 운영 환경의 데이터베이스에도 같은 SQL을 씁니다. 운영 환경의 데이터베이스에 접속하는 방법은 PostgreSQL을 둘 곳과 함께 정합니다([docs/INFRA.md](docs/INFRA.md#32-postgresql을-어디에-둘-것인가) 3.2절).
+
+## 로컬에서 Google 로그인 점검하기
+
+백엔드 담당자는 프론트엔드 레포 없이 로컬에서 실제 Google 계정으로 로그인과 로그아웃을 끝까지 확인할 수 있습니다. 점검 스크립트(`scripts/login_check.py`)가 프론트엔드의 개발 서버를 흉내 내는 대역 서버를 `FRONTEND_URL`에 띄우고, 화면이 보이는 브라우저를 열어 프론트엔드가 하는 순서대로 로그인, 내 정보 조회, 로그아웃을 부릅니다. 사람은 브라우저의 Google 화면에서 안내받은 계정을 고르기만 합니다. 이렇게 점검하는 이유는 [docs/ADR.md](docs/ADR.md#adr-026-로컬에서-실제-google-로그인을-점검하는-방법)의 ADR-026에 있습니다.
+
+### 준비할 것
+
+- 로컬의 돌아올 주소 `http://localhost:5173/api/auth/google/callback`을 등록한 Google OAuth 클라이언트의 ID와 비밀값. 주소를 등록하는 곳은 [docs/INFRA.md](docs/INFRA.md#35-google-로그인-설정) 3.5절에 있습니다.
+- 실제 Google 계정 두 개. 계정 A는 허용 목록에 넣고, 계정 B는 넣지 않습니다.
+- 켜 둔 Docker Desktop.
+- [개발 환경](#개발-환경)의 `uv sync`를 마친 레포.
+
+### 점검하는 순서
+
+아래 명령은 레포의 최상위 폴더에서 실행합니다. 명령의 `a@example.com`과 `b@example.com`은 계정 A와 계정 B의 이메일로 바꿉니다.
+
+**1. `.env`를 만듭니다.** 견본을 복사한 뒤 `GOOGLE_CLIENT_ID`와 `GOOGLE_CLIENT_SECRET`을 채웁니다. `FRONTEND_URL`은 `http://localhost:5173` 그대로 둡니다. 서버가 만드는 돌아올 주소와 대역 서버가 뜨는 주소가 모두 이 값을 따르기 때문입니다. `.env`는 커밋하지 않습니다.
+
+```bash
+cp .env.example .env   # 견본을 복사해 .env를 만듭니다.
+```
+
+**2. compose로 서버를 띄웁니다.** `.env`를 바꾼 뒤에는 이 명령으로 다시 띄워야 서버가 새 값을 받습니다. 8080이나 5432 포트를 다른 프로그램이 쓰고 있으면 [포트가 이미 쓰이고 있을 때](#포트가-이미-쓰이고-있을-때)대로 띄우고, 5번의 점검 스크립트에도 같은 `API_PORT`와 `DB_PORT`를 환경변수로 넘깁니다.
+
+```bash
+docker compose up --build -d --wait   # 데이터베이스, 마이그레이션, 서버를 띄웁니다. 서버는 .env의 세 값을 받습니다.
+```
+
+**3. 계정 A를 허용 목록에 `user`로 넣습니다.** 계정 B는 넣지 않습니다. 이 SQL의 뜻과 다른 SQL은 [허용 목록에 사람 넣고 빼기](#허용-목록에-사람-넣고-빼기)에 있습니다.
+
+```bash
+docker compose exec db psql -U diegesis -d diegesis -c "INSERT INTO allowed_emails (email, role) VALUES (lower('a@example.com'), 'user') ON CONFLICT (email) DO UPDATE SET role = EXCLUDED.role;"   # 계정 A를 user로 넣습니다.
+```
+
+**4. Playwright의 브라우저를 설치합니다.** 이 컴퓨터에서 처음 한 번만 합니다.
+
+```bash
+uv run playwright install chromium   # 점검 스크립트가 여는 브라우저(Chromium)를 설치합니다.
+```
+
+**5. 점검 스크립트를 실행합니다.** 프론트엔드의 개발 서버가 5173 포트를 쓰고 있으면 끄고 실행합니다. 대역 서버가 그 포트에 떠야 하기 때문입니다.
+
+```bash
+uv run python scripts/login_check.py --allowed-email a@example.com --denied-email b@example.com   # 계정 A의 로그인과 로그아웃, 계정 B의 로그인 시도를 차례로 점검합니다.
+```
+
+브라우저가 열리고 Google 화면이 나오면, 스크립트의 안내에 따라 처음에는 계정 A를, 다음에는 계정 B를 고릅니다. 비밀번호를 물으면 브라우저에서 직접 넣습니다. 스크립트는 Google 화면에 아무것도 입력하지 않고, 비밀번호를 받지도 않습니다. Google이 자동화된 브라우저라며 로그인을 막으면 우회하지 말고 멈춥니다. 그때의 방법은 ADR-026의 재검토 조건에 따라 정합니다.
+
+점검을 마치면 `docker compose down`으로 서버를 내립니다.
+
+### 결과를 읽는 법
+
+스크립트는 시점마다 `allowed_emails`, `users`, `login_sessions`의 상태와 브라우저의 상태(주소, 쿠키, `GET /api/me`의 응답)를 출력합니다. 시점은 계정 A의 로그인 전, 로그인 후, 로그아웃 전, 로그아웃 후와 계정 B의 로그인 전, 로그인 시도 후입니다. 시점마다 기대하는 상태는 [docs/backlog/epic-1/testcase.md](docs/backlog/epic-1/testcase.md#로컬-로그인-점검의-테이블-상태)의 "로컬 로그인 점검의 테이블 상태"에 있습니다. 스크립트도 그 표로 판정해서, 표와 다른 것이 있으면 끝에 모아 보여 주고 0이 아닌 코드로 끝납니다. 종료 코드마다의 뜻은 `uv run python scripts/login_check.py --help`로 봅니다.
+
+쿠키의 값과 `token_hash`의 값은 출력하지 않고, `token_hash`가 쿠키 값의 SHA-256과 같은지만 출력합니다.
+
+스크립트는 브라우저를 열기 전에 서버가 응답하는지, 서버가 Google 클라이언트 ID와 돌아올 주소를 제대로 받았는지, 점검 전의 테이블 상태가 표의 "로그인 전"과 같은지, 5173 포트가 비어 있는지를 확인합니다. 하나라도 어긋나면 브라우저를 열지 않고, 어긋난 것과 고치는 방법을 보여 준 뒤 끝납니다. 점검 전의 테이블 상태가 맞지 않을 때에는 상태를 맞추는 SQL과 데이터베이스에 접속하는 명령을 보여 줍니다. 스크립트는 개발용 데이터베이스를 읽기만 하므로 그 SQL을 직접 실행하지 않습니다. 사람이 그 SQL을 실행한 뒤 스크립트를 다시 돌립니다. 예를 들어 한 번 점검한 계정 A의 `users` 행은 로그아웃한 뒤에도 남아 있으므로, 같은 계정으로 다시 점검하면 스크립트는 그 행을 지우는 SQL을 보여 줍니다.
 
 ## 백엔드가 하는 일
 
