@@ -349,6 +349,42 @@ async def test_first_login_racing_with_other_account_is_login_failed(
     assert [write.method for write in store.writes] == ["create_user"]
 
 
+class StoreLosingRacedRow(FakeAuthStore):
+    """등록이 부딪혔다고(None) 돌려주지만, 다시 조회하면 부딪힌 행이 보이지 않는 저장소.
+
+    겹친 요청이 만든 행이 다시 조회하기 전에 사라진 경우를 흉내 낸다(2차 리뷰 TST-2).
+    """
+
+    async def create_user(
+        self, *, email: str, google_sub: str, display_name: str | None
+    ) -> UserRecord | None:
+        self._record("create_user", email=email, google_sub=google_sub, display_name=display_name)
+        return None
+
+
+async def test_first_login_whose_raced_row_is_gone_is_login_failed(
+    provider: FakeIdentityProvider,
+) -> None:
+    """등록하지 못했고 다시 조회해도 쌍이 맞는 사용자가 없으면 LOGIN_FAILED다.
+
+    등록을 시도한 것 말고는 쓰지 않는다. 옛 쿠키의 행도 지우지 않는다.
+    """
+    store = StoreLosingRacedRow()
+    store.allow("reader@example.com")
+    # 옛 쿠키는 다른 사람의 로그인 상태를 가리킨다. 실패한 로그인이 이 행을 지우면 안 된다.
+    other = store.put_user("other@example.com", "sub-other")
+    old_hash = security.hash_token(OLD_SESSION_TOKEN)
+    store.put_login_session(old_hash, other.id, datetime.now(UTC) + SESSION_TTL)
+    service = AuthService(store, provider, session_ttl=SESSION_TTL)
+
+    result = await complete(service, current_session_token=OLD_SESSION_TOKEN)
+
+    assert result == LOGIN_FAILED
+    assert [write.method for write in store.writes] == ["create_user"]
+    assert store.users == {other.id: other}
+    assert set(store.login_sessions) == {old_hash}
+
+
 # --- 성공 -------------------------------------------------------------------
 
 
@@ -575,26 +611,87 @@ SERVICE_PACKAGE = "app.auth"
 # 구현에 기대게 된다(docs/ARCHITECTURE.md 8절, ADR-029).
 
 
-def imported_names(source: str, package: str = SERVICE_PACKAGE) -> set[str]:
-    """import 구문이 가져오는 것의 전체 이름. `from a.b import c`는 `a.b.c`로 센다.
+# 문자열로 모듈을 가져오는 함수(2차 리뷰 ARC-1). 인자가 문자열 상수가 아니면 무엇을 가져오는지
+# 정적으로 알 수 없으므로, 아래 이름으로 세어 검사가 닫힌 채 실패하게 한다.
+DYNAMIC_IMPORT = "importlib.import_module"
+DYNAMIC_IMPORT_BUILTIN = "__import__"
+UNKNOWN_DYNAMIC_IMPORT = "<문자열 상수가 아닌 동적 import>"
 
-    상대 경로의 import는 package를 기준으로 절대 이름으로 바꾼다.
+
+def _absolute(module: str, level: int, package: str) -> str:
+    """점 level개로 시작하는 상대 이름을 package 기준의 절대 이름으로 바꾼다."""
+    base_parts = package.split(".")[: len(package.split(".")) - (level - 1)]
+    return ".".join([*base_parts, *([module] if module else [])])
+
+
+def _dynamic_import_name(node: ast.Call, aliases: dict[str, str], package: str) -> str | None:
+    """node가 문자열로 모듈을 가져오는 호출이면 가져오는 모듈의 절대 이름. 아니면 None이다."""
+    func = node.func
+    if isinstance(func, ast.Name):
+        target = aliases.get(func.id, func.id)
+    elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+        target = f"{aliases.get(func.value.id, func.value.id)}.{func.attr}"
+    else:
+        return None
+    if target not in {DYNAMIC_IMPORT, DYNAMIC_IMPORT_BUILTIN}:
+        return None
+    first = node.args[0] if node.args else None
+    if not (isinstance(first, ast.Constant) and isinstance(first.value, str)):
+        return UNKNOWN_DYNAMIC_IMPORT
+    module = first.value
+    if target == DYNAMIC_IMPORT and module.startswith("."):
+        # import_module(".x", "a.b")는 둘째 인자(package)를 기준으로 푼다.
+        anchor = node.args[1] if len(node.args) > 1 else None
+        for keyword in node.keywords:
+            if keyword.arg == "package":
+                anchor = keyword.value
+        if anchor is None:
+            base = package
+        elif isinstance(anchor, ast.Constant) and isinstance(anchor.value, str):
+            base = anchor.value
+        else:
+            return UNKNOWN_DYNAMIC_IMPORT
+        level = len(module) - len(module.lstrip("."))
+        return _absolute(module.lstrip("."), level, base)
+    return module
+
+
+def imported_names(source: str, package: str = SERVICE_PACKAGE) -> set[str]:
+    """소스가 가져오는 것의 전체 이름. `from a.b import c`는 `a.b.c`로 센다.
+
+    상대 경로의 import는 package를 기준으로 절대 이름으로 바꾼다. `importlib.import_module("a.b")`와
+    `__import__("a.b")`처럼 문자열로 가져오는 것도 `a.b`로 센다. 다른 이름으로 가져와도 센다.
     """
+    tree = ast.parse(source)
+    # import한 이름이 가리키는 전체 이름. `import importlib as il`이면 il → importlib.
+    aliases: dict[str, str] = {}
     found: set[str] = set()
-    for node in ast.walk(ast.parse(source)):
+    for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            found.update(alias.name for alias in node.names)
+            for alias in node.names:
+                found.add(alias.name)
+                if alias.asname:
+                    aliases[alias.asname] = alias.name
         elif isinstance(node, ast.ImportFrom):
             if node.level:
-                base_parts = package.split(".")[: len(package.split(".")) - (node.level - 1)]
-                module = ".".join([*base_parts, *([node.module] if node.module else [])])
+                module = _absolute(node.module or "", node.level, package)
             else:
                 module = node.module or ""
-            found.update(f"{module}.{alias.name}" for alias in node.names)
+            for alias in node.names:
+                found.add(f"{module}.{alias.name}")
+                aliases[alias.asname or alias.name] = f"{module}.{alias.name}"
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            name = _dynamic_import_name(node, aliases, package)
+            if name is not None:
+                found.add(name)
     return found
 
 
 def is_forbidden(name: str) -> bool:
+    """특정 기술이나 어댑터의 이름인가. 무엇을 가져오는지 모르는 동적 import도 금지로 본다."""
+    if name == UNKNOWN_DYNAMIC_IMPORT:
+        return True
     return any(name == module or name.startswith(f"{module}.") for module in FORBIDDEN_MODULES)
 
 
@@ -622,11 +719,36 @@ def is_allowed_app_import(name: str) -> bool:
         ("from app.core import security", set()),
         ("import httpx_mock, fastapiish", set()),
         ("from app.adaptersx import thing", set()),
+        # 문자열로 가져오기(2차 리뷰 ARC-1)
+        ("import importlib\ndef f():\n    return importlib.import_module('httpx')", {"httpx"}),
+        ("import importlib as il\nil.import_module('fastapi')", {"fastapi"}),
+        (
+            "from importlib import import_module as load\nload('app.adapters.google')",
+            {"app.adapters.google"},
+        ),
+        ("__import__('sqlalchemy.ext.asyncio')", {"sqlalchemy.ext.asyncio"}),
+        ("import importlib\nimportlib.import_module('..adapters', 'app.auth')", {"app.adapters"}),
+        ("import importlib\nimportlib.import_module(NAME)", {UNKNOWN_DYNAMIC_IMPORT}),
+        ("__import__(NAME)", {UNKNOWN_DYNAMIC_IMPORT}),
+        ("import importlib\nimportlib.import_module('json')", set()),
     ],
 )
 def test_forbidden_import_detector(source: str, forbidden: set[str]) -> None:
     # 아래 검사가 import를 놓치면 service가 특정 기술을 가져와도 초록이 된다.
     assert {name for name in imported_names(source) if is_forbidden(name)} == forbidden
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import importlib\nimportlib.import_module('app.auth.repository')",
+        "from importlib import import_module\nimport_module('.repository', package='app.auth')",
+        "__import__('app.auth.repository')",
+    ],
+)
+def test_detector_counts_app_module_imported_by_string(source: str) -> None:
+    # service가 repository를 문자열로 가져와도 아래의 허용 규칙에 걸려야 한다(2차 리뷰 ARC-1).
+    assert "app.auth.repository" in imported_names(source)
 
 
 @pytest.mark.parametrize(
