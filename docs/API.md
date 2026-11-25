@@ -324,10 +324,10 @@ Cookie: diegesis_session=EViRNy6gNGLqNHYCTW4x_31HEbe5gZOm1Uf02Q0SiQM
     ```
 
   - **Request Body**: 없습니다.
-  - **Response Header** (`204 No Content`): 브라우저에 남아 있는 쿠키를 지웁니다.
+  - **Response Header** (`204 No Content`): 브라우저에 남아 있는 쿠키를 심을 때와 같은 이름, 경로, 속성으로 지웁니다. `FRONTEND_URL`이 `https`이면 `Secure`도 붙습니다(ADR-027).
 
     ```http
-    Set-Cookie: diegesis_session=; Max-Age=0; Path=/
+    Set-Cookie: diegesis_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0
     ```
 
   - **Response Body**: 없습니다.
