@@ -5,6 +5,8 @@ compose로 띄운 개발용 데이터베이스에는 접속하지 않는다(docs
 """
 
 import asyncio
+import hashlib
+import logging
 import math
 from pathlib import Path
 
@@ -15,6 +17,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import Column, MetaData, String, Table, select, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 from testcontainers.community.postgres import PostgresContainer
 
@@ -326,3 +329,55 @@ def test_db_session_does_not_connect_until_first_query(app_env: None) -> None:
         response = client.get(TEST_ROUTE)
 
     assert response.status_code == 200
+
+
+# --- 문장 오류에 바인딩 값을 싣지 않는다 (2차 리뷰 SEC-1) -------------------------
+#
+# 데이터베이스가 문장을 거부하면(ADR-030의 500) 그 예외가 서버 로그에 추적과 함께 남는다. 엔진이
+# 예외에 바인딩 값을 담으면 허용 목록 밖의 이메일이나 token_hash가 로그에 실린다. 아래 문장은 없는
+# 테이블을 읽으므로 데이터베이스의 오류 문장에는 바인딩 값이 나오지 않는다. 그래서 로그에 값이
+# 나온다면 엔진이 담은 것이다.
+
+LOGGED_EMAIL = "victim.pii@example.com"
+LOGGED_TOKEN_HASH = hashlib.sha256(b"cookie-value-of-victim").hexdigest()
+FAILING_STATEMENT = text(
+    "SELECT 1 FROM no_such_table WHERE email = :email AND token_hash = :token_hash"
+)
+FAILING_PARAMETERS = {"email": LOGGED_EMAIL, "token_hash": LOGGED_TOKEN_HASH}
+
+
+async def test_statement_error_from_engine_carries_no_bound_values(database_url: str) -> None:
+    engine = create_engine(database_url)
+    try:
+        async with engine.connect() as connection:
+            with pytest.raises(DBAPIError) as raised:
+                await connection.execute(FAILING_STATEMENT, FAILING_PARAMETERS)
+    finally:
+        await engine.dispose()
+
+    message = str(raised.value)
+    # 전제: 데이터베이스가 문장을 거부했고, 예외의 문장에는 그 SQL이 있다.
+    assert "no_such_table" in message
+    assert LOGGED_EMAIL not in message
+    assert LOGGED_TOKEN_HASH not in message
+
+
+def test_server_error_log_of_failed_statement_has_no_bound_values(
+    clean_db: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    app = create_app()
+
+    @app.get(TEST_ROUTE)
+    async def failing(session: DbSession) -> None:
+        await session.execute(FAILING_STATEMENT, FAILING_PARAMETERS)
+
+    caplog.set_level(logging.DEBUG)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get(TEST_ROUTE)
+
+    assert response.status_code == 500
+    # 전제: 처리되지 않은 예외가 추적과 함께 로그에 남았다.
+    assert "처리되지 않은 예외" in caplog.text
+    assert "no_such_table" in caplog.text
+    assert LOGGED_EMAIL not in caplog.text
+    assert LOGGED_TOKEN_HASH not in caplog.text

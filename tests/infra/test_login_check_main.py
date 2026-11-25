@@ -275,6 +275,20 @@ BROKEN = {
         {"precheck_error": asyncpg.exceptions.InvalidCatalogNameError("no database")},
         f"개발용 데이터베이스(localhost:{DB_PORT})를 읽지 못했다: InvalidCatalogNameError",
     ),
+    # DB_PORT에 asyncpg가 지원하지 않는 인증이나 프로토콜을 쓰는 서버가 떠 있을 때(2차 리뷰 COR-1).
+    # 두 예외는 OSError와 PostgresError의 하위 클래스가 아니다.
+    "database_auth_unsupported": Broken(
+        {
+            "precheck_error": asyncpg.InterfaceError(
+                "unsupported authentication method requested by the server: 99"
+            )
+        },
+        f"개발용 데이터베이스(localhost:{DB_PORT})를 읽지 못했다: InterfaceError",
+    ),
+    "database_protocol_broken": Broken(
+        {"precheck_error": asyncpg.exceptions.InternalClientError("unexpected message length")},
+        f"개발용 데이터베이스(localhost:{DB_PORT})를 읽지 못했다: InternalClientError",
+    ),
     "frontend_port_busy": Broken(
         {"port_busy": True},
         f"{FRONTEND}에서 이미 다른 프로그램이 연결을 받고 있다.",

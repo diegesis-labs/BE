@@ -424,6 +424,17 @@ ABORTS = {
         asyncpg.exceptions.UndefinedTableError('relation "users" does not exist'),
         "점검 중에 개발용 데이터베이스를 읽지 못했다: UndefinedTableError",
     ),
+    # DB_PORT의 서버가 asyncpg가 지원하지 않는 인증이나 프로토콜을 쓸 때(2차 리뷰 COR-1).
+    "database_auth_unsupported": Abort(
+        "read_error",
+        asyncpg.InterfaceError("unsupported authentication method requested by the server: 99"),
+        "점검 중에 개발용 데이터베이스를 읽지 못했다: InterfaceError",
+    ),
+    "database_protocol_broken": Abort(
+        "read_error",
+        asyncpg.exceptions.InternalClientError("unexpected message length"),
+        "점검 중에 개발용 데이터베이스를 읽지 못했다: InternalClientError",
+    ),
     "browser_closed": Abort(
         "evaluate_error",
         # Playwright의 메시지에는 결과 처리의 주소(code와 state)가 들어 있을 수 있다.
