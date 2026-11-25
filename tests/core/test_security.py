@@ -77,9 +77,8 @@ def test_hash_token_differs_for_different_tokens() -> None:
 # --- secure_equals --------------------------------------------------------------
 
 
-def test_secure_equals_true_for_same_value() -> None:
-    value = "EViRNy6gNGLqNHYCTW4x_31HEbe5gZOm1Uf02Q0SiQM"
-
+@pytest.mark.parametrize("value", ["EViRNy6gNGLqNHYCTW4x_31HEbe5gZOm1Uf02Q0SiQM", "로그인"])
+def test_secure_equals_true_for_same_value(value: str) -> None:
     # 같은 객체가 아니라 같은 내용의 다른 문자열로도 같다고 판정해야 한다.
     assert security.secure_equals(value, "".join(value)) is True
 
@@ -90,6 +89,10 @@ def test_secure_equals_true_for_same_value() -> None:
         ("abc", "abd"),
         ("abc", "abcd"),
         ("abc", "ABC"),
+        # 쿼리의 state는 공격자가 정한다. ASCII가 아닌 문자가 와도 예외가 아니라 False여야
+        # 로그인 결과 처리가 500으로 끝나지 않는다(E1 S1.3).
+        ("abc", "로그인"),
+        ("로그인", "로그인상태"),
         # 빈 값끼리 같다고 판정하면 state의 확인이 무력해진다(TC-1.3.3, ADR-027).
         ("", ""),
         ("abc", ""),

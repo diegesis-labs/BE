@@ -26,7 +26,7 @@ line-length = 100
 extend-exclude = ["scripts/execute.py", "scripts/test_execute.py", "phases"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP"]
+select = ["E", "F", "I", "B", "UP", "S311"]
 
 [tool.pyright]
 include = ["app", "tests", "scripts"]
