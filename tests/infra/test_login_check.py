@@ -457,6 +457,142 @@ class TestObservation:
         assert (recorded.target, recorded.status, recorded.set_cookies) == (ME_PATH, 502, ())
 
 
+def closed_backend_url() -> str:
+    """아무도 듣지 않는 포트의 주소. 포트를 하나 잡았다가 놓는다."""
+    with socket.socket() as probe:
+        probe.bind((LOOPBACK, 0))
+        return f"http://{LOOPBACK}:{probe.getsockname()[1]}"
+
+
+@dataclass
+class HeldRecord:
+    """대역 서버의 기록(observe)을 release가 설정될 때까지 붙잡아 둔다."""
+
+    entered: threading.Event = field(default_factory=threading.Event)
+    release: threading.Event = field(default_factory=threading.Event)
+
+    def observe(self, exchange: Exchange) -> None:
+        self.entered.set()
+        self.release.wait(10)
+
+
+@dataclass(frozen=True)
+class RecordCase:
+    method: str
+    target: str
+    headers: Headers
+    body: bytes | None
+    status: int
+    backend_reachable: bool = True
+
+
+# 대역 서버가 응답을 내는 세 자리(_forward, _page, _plain)를 모두 지난다.
+RECORD_CASES = {
+    "forward": RecordCase("GET", ME_PATH, [("Host", "localhost:5173")], None, 302),
+    "page": RecordCase("GET", "/login?error=NOT_ALLOWED", [("Host", "localhost:5173")], None, 200),
+    "plain_411": RecordCase(
+        "POST",
+        LOGOUT_PATH,
+        [("Host", "localhost"), ("Transfer-Encoding", "chunked")],
+        b"2\r\nhi\r\n0\r\n\r\n",
+        411,
+    ),
+    "plain_400": RecordCase(
+        "POST", LOGOUT_PATH, [("Host", "localhost"), ("Content-Length", "abc")], None, 400
+    ),
+    "plain_502": RecordCase(
+        "GET", ME_PATH, [("Host", "localhost")], None, 502, backend_reachable=False
+    ),
+}
+
+
+class TestRecordBeforeResponse:
+    """대역 서버는 응답을 브라우저에 보내기 전에 기록한다(E1 S1.7 "못 박을 것", 3차 리뷰 TST-2).
+
+    응답을 받은 브라우저는 곧바로 다음 요청을 보내고, 그 요청은 다른 스레드가 받는다. 응답을 보낸
+    뒤에 기록하면 다음 요청이 먼저 기록될 수 있다. 요청을 하나씩 차례로 보내서는 이 순서를 가릴 수
+    없으므로, 기록을 붙잡아 둔 동안 응답이 나가지 않는지 본다.
+    """
+
+    @pytest.mark.parametrize("name", list(RECORD_CASES))
+    def test_response_is_not_sent_until_recorded(self, running: Running, name: str) -> None:
+        case = RECORD_CASES[name]
+        backend_url = running.backend.url if case.backend_reachable else closed_backend_url()
+        held = HeldRecord()
+        stand_in = FrontendStandIn(
+            listen_host=LOOPBACK, listen_port=0, backend_url=backend_url, observe=held.observe
+        )
+        stand_in.start()
+        replies: list[Reply] = []
+        client = threading.Thread(
+            target=lambda: replies.append(
+                send(stand_in.port, case.method, case.target, case.headers, case.body)
+            ),
+            daemon=True,
+        )
+        try:
+            client.start()
+            assert held.entered.wait(5), "대역 서버가 이 요청을 기록하지 않았다"
+            client.join(0.3)
+            assert client.is_alive() and replies == [], "기록이 끝나기 전에 응답이 나갔다"
+            held.release.set()
+            client.join(5)
+        finally:
+            held.release.set()
+            stand_in.stop()
+
+        assert [reply.status for reply in replies] == [case.status]
+
+
+class TestRequestLinesAreNotPrinted:
+    """대역 서버는 요청 줄을 찍지 않는다(E1 "못 박을 것", 3차 리뷰 TST-5).
+
+    로그인 결과 처리의 요청 줄에는 Google의 code와 state가 있다. http.server는 응답마다 요청 줄을
+    표준 오류에 찍으므로, 대역 서버가 그것을 끄지 않으면 오류 응답과 화면에서 그 값이 찍힌다.
+    """
+
+    def test_no_request_line_on_errors_or_pages(
+        self, running: Running, capfd: pytest.CaptureFixture[str]
+    ) -> None:
+        port = running.stand_in.port
+        replies = [
+            send(port, "GET", "/login?error=NOT_ALLOWED&code=PAGECODE1", [("Host", "localhost")]),
+            send(
+                port,
+                "POST",
+                f"{LOGOUT_PATH}?code=CHUNKCODE2",
+                [("Host", "localhost"), ("Transfer-Encoding", "chunked")],
+                b"0\r\n\r\n",
+            ),
+            send(
+                port,
+                "POST",
+                f"{LOGOUT_PATH}?code=LENGTHCODE3",
+                [("Host", "localhost"), ("Content-Length", "abc")],
+            ),
+        ]
+        unreachable = FrontendStandIn(
+            listen_host=LOOPBACK, listen_port=0, backend_url=closed_backend_url()
+        )
+        unreachable.start()
+        try:
+            replies.append(
+                send(
+                    unreachable.port,
+                    "GET",
+                    "/api/auth/google/callback?code=CALLBACKCODE4&state=CALLBACKSTATE5",
+                    [("Host", "localhost")],
+                )
+            )
+        finally:
+            unreachable.stop()
+
+        assert [reply.status for reply in replies] == [200, 411, 400, 502]
+        out, err = capfd.readouterr()
+        for secret in ("PAGECODE1", "CHUNKCODE2", "LENGTHCODE3", "CALLBACKCODE4", "CALLBACKSTATE5"):
+            assert secret not in out + err
+
+
 class TestEdges:
     def test_backend_unreachable_is_502(self) -> None:
         # 포트를 하나 잡았다가 놓으면, 그 포트에는 아무도 듣지 않는다.

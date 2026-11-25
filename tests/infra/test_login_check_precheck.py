@@ -15,12 +15,20 @@
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 import asyncpg
 import pytest
 
 from scripts import login_check
-from scripts.login_check import PrecheckProblem, connect_read_only, precheck
+from scripts.login_check import (
+    AllowedRow,
+    PrecheckProblem,
+    SessionRow,
+    connect_read_only,
+    precheck,
+    read_state,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -181,3 +189,52 @@ async def test_precheck_reads_through_read_only_connection(
     await precheck(clean_db, allowed_email=A, denied_email=B)
 
     assert opened == ["on"]
+
+
+# 점검이 시점마다 읽는 상태(read_state)의 값. 점검 1의 login_sessions 칸(token_hash, expires_at)과
+# 점검 2의 전체 행 수는 이 값으로 판정한다(3차 리뷰 TST-4).
+ALLOWED_AT = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
+A_SESSION_CREATED = datetime(2026, 1, 5, 9, 30, tzinfo=UTC)
+A_SESSION_EXPIRES = datetime(2026, 1, 19, 9, 30, tzinfo=UTC)
+A_TOKEN_HASH = "a" * 64
+
+
+async def test_read_state_reads_sessions_of_the_two_accounts_and_counts_all(clean_db: str) -> None:
+    await execute(
+        clean_db,
+        [
+            (
+                "INSERT INTO allowed_emails (email, role, created_at) VALUES ($1, 'user', $2)",
+                (A, ALLOWED_AT),
+            ),
+            allow(OTHER),
+            user(A, "sub-a"),
+            user(OTHER, "sub-other"),
+            (
+                "INSERT INTO login_sessions (token_hash, user_id, expires_at, created_at) "
+                "SELECT $2, id, $3, $4 FROM users WHERE email = $1",
+                (A, A_TOKEN_HASH, A_SESSION_EXPIRES, A_SESSION_CREATED),
+            ),
+            # 다른 사람의 로그인 상태 둘. 두 계정의 행에는 나오지 않고, 전체 행 수에만 든다.
+            session(OTHER, "hash-other-1"),
+            session(OTHER, "hash-other-2"),
+        ],
+    )
+    conn = await asyncpg.connect(plain_dsn(clean_db))
+    try:
+        a_id = await conn.fetchval("SELECT id FROM users WHERE email = $1", A)
+    finally:
+        await conn.close()
+
+    state = await read_state(clean_db, emails=(A, B))
+
+    assert state.allowed == (AllowedRow(A, "user", ALLOWED_AT),)
+    assert [(row.email, row.google_sub) for row in state.users] == [(A, "sub-a")]
+    assert state.sessions_for(A) == (
+        SessionRow(A_TOKEN_HASH, a_id, A, A_SESSION_EXPIRES, A_SESSION_CREATED),
+    )
+    # 두 계정의 행은 A의 것 하나뿐이다. 다른 사람의 행은 담지 않는다.
+    assert state.sessions == state.sessions_for(A)
+    assert state.sessions_for(B) == ()
+    # login_sessions의 전체 행 수는 두 계정과 상관없이 센다(점검 2의 칸).
+    assert state.session_total == 3
