@@ -51,7 +51,6 @@ markers = [
 [dependency-groups]
 dev = [
     "actionlint-py>=1.7.12.25",
-    "playwright>=1.65.2",
     "pyright>=1.1.414",
     "pytest>=9.2.0",
     "pytest-asyncio>=1.5.0",

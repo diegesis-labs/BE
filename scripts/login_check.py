@@ -1,7 +1,7 @@
 """로컬 로그인 점검 스크립트.
 
 백엔드 담당자가 프론트엔드 레포 없이, 로컬에서 실제 Google 계정으로 로그인과 로그아웃을 끝까지
-확인하는 도구다(docs/ADR.md의 ADR-026, docs/backlog/epic-1/E1-login-allowlist.md의 S1.7).
+확인하는 도구다(docs/ADR.md의 ADR-026과 ADR-031, docs/backlog/epic-1/E1-login-allowlist.md의 S1.7).
 
 ## 실행 방법
 
@@ -16,35 +16,46 @@ compose로 서버를 띄우고, 허용 목록에 계정 A를 `user`로 넣은 �
 
 ## 사람이 하는 일
 
-스크립트가 연 브라우저의 Google 화면에서, 안내받은 계정을 고르고 필요하면 비밀번호를 넣는다.
-스크립트는 Google 화면에 아무것도 입력하지 않으며, 비밀번호를 받지 않는다. 그리고 시점마다 출력된
-상태를 docs/backlog/epic-1/testcase.md의 "로컬 로그인 점검의 테이블 상태"와 대조한다. 스크립트도
-같은 표로 판정해서, 다른 것을 끝에 모아 보여 준다.
+스크립트는 브라우저를 열거나 조종하지 않는다(ADR-031). 사람은 평소 쓰는 브라우저에서 점검마다 새
+게스트 창을 열고, 터미널의 안내에 따라 대역 서버의 화면(`FRONTEND_URL/`)에서 버튼을 누르고, Google
+화면에서 안내받은 계정을 고른다. 스크립트는 비밀번호를 받지 않는다. 그리고 시점마다 출력된 상태를
+docs/backlog/epic-1/testcase.md의 "로컬 로그인 점검의 테이블 상태"와 대조한다. 스크립트도 같은
+표로 판정해서, 다른 것을 끝에 모아 보여 준다.
+
+## 브라우저의 상태를 보는 방법
+
+브라우저가 받은 응답과 보낸 요청은 모두 대역 서버를 지난다. 대역 서버는 요청과 응답 하나마다
+`Exchange`를 하나 기록하고, `BrowserWatch`가 그것으로 브라우저를 따라간다.
+
+- 주소는 브라우저가 마지막으로 연 화면(`/api` 밖의 경로)이다.
+- 쿠키와 그 속성은 백엔드가 보낸 `Set-Cookie`를 브라우저처럼 이름과 경로로 쌓아 센다(`CookieJar`).
+- 브라우저가 요청에 붙인 `Cookie`가 그 셈과 다르면 표와 다른 것으로 보고한다. 브라우저의 쿠키
+  저장소를 직접 읽지 못하므로, 브라우저가 쿠키를 받아들이지 않은 경우를 이것으로 잡는다.
 
 ## 종료 코드
 
 - 0: 모든 시점의 상태가 표와 같다.
 - 1: 표와 다른 것이 있다. 끝에 모아 보여 준다.
 - 2: 명령의 인자가 잘못됐다.
-- 3: 브라우저를 열기 전의 확인(서버, Google 설정, 점검 전의 테이블 상태, 포트)이 어긋났다.
-  브라우저를 열지 않고, 어긋난 것과 고치는 방법을 보여 준다. 상태를 맞추는 SQL은 보여 주기만 한다.
-- 4: 점검을 끝내지 못했다. 로그인을 기다리는 시간이 지났거나, 브라우저가 닫혔거나, 데이터베이스에
-  닿지 못했다.
+- 3: 점검을 시작하기 전의 확인(서버, Google 설정, 점검 전의 테이블 상태, 포트)이 어긋났다.
+  점검을 시작하지 않고, 어긋난 것과 고치는 방법을 보여 준다. 상태를 맞추는 SQL은 보여 주기만 한다.
+- 4: 점검을 끝내지 못했다. 안내한 요청이 기다리는 시간 안에 대역 서버를 지나가지 않았거나,
+  데이터베이스에 닿지 못했다.
 
 ## 지키는 것
 
 - 사람이 phase의 MANUAL 점검에서 실행한다. 실제 Google 계정과 사람의 입력이 필요하므로
   `scripts/check.sh`와 CI에서는 실행하지 않는다. 검사가 확인하는 것은 Google 없이 확인할 수 있는
-  부분(대역 서버, 점검 전 확인, 표와의 대조, 출력)뿐이며, 그 테스트는
-  `tests/infra/test_login_check*.py`에 있다. 그래서 판정과 출력은 Playwright와 데이터베이스에서
-  떼어 낸 순수 함수로 두고, 브라우저를 모는 부분은 그 함수들을 부르는 얇은 층으로 둔다.
+  부분(대역 서버와 그 기록, 브라우저를 따라가는 셈, 점검 전 확인, 표와의 대조, 출력)뿐이며, 그
+  테스트는 `tests/infra/test_login_check*.py`에 있다. 그래서 판정과 출력은 대역 서버와
+  데이터베이스에서 떼어 낸 순수 함수로 두고, 점검을 진행하는 부분은 그 함수들을 부르는 얇은 층으로
+  둔다.
 - 개발용 데이터베이스를 읽기 전용 트랜잭션으로만 읽는다. 개발자의 데이터를 지우거나 바꾸지 않는다.
-- 브라우저는 점검마다 새 컨텍스트로 열고, 프로필을 디스크에 남기지 않는다. 자동화를 탐지하는 장치를
-  피하는 옵션을 쓰지 않는다. Google이 자동화된 브라우저의 로그인을 막으면, 그때의 방법은 ADR-026의
-  재검토 조건에 따라 사람이 정한다.
-- 쿠키의 값은 읽는 자리에서 바로 SHA-256으로 바꾸고, 값 자체는 어디에도 담지 않는다. 쿠키의 값과
-  `token_hash`의 값은 출력하지 않으며, `token_hash`는 쿠키 값의 SHA-256과 같은지만 출력한다.
-  스크린숏, 트레이스, HAR도 남기지 않는다.
+- 브라우저를 자동화하는 도구를 쓰지 않고, 사람이 연 브라우저에 연결하지도 않는다. Google은 자동화로
+  조종되는 브라우저의 로그인을 막는다(ADR-031).
+- 쿠키의 값은 헤더를 읽는 자리에서 바로 SHA-256으로 바꾸고, 값 자체는 어디에도 담지 않는다. 쿠키의
+  값과 `token_hash`의 값은 출력하지 않으며, `token_hash`는 쿠키 값의 SHA-256과 같은지만 출력한다.
+  로그인 결과 처리의 쿼리(Google의 code와 state)도 기록하지 않는다.
 
 이 파일은 `app/`을 import하지 않는다. 점검 스크립트는 compose로 띄운 서버를 바깥에서 보는 도구다.
 서버의 코드를 끌어오면 서버를 거치지 않은 것을 확인하게 된다.
@@ -52,8 +63,9 @@ compose로 서버를 띄우고, 허용 목록에 계정 A를 `user`로 넣은 �
 ## 프론트엔드 대역 서버
 
 `FrontendStandIn`은 프론트엔드의 개발 서버(Vite)를 흉내 낸다. `FRONTEND_URL`의 주소에서 요청을
-받아, `/api`로 시작하는 요청은 백엔드로 넘기고 그 밖의 경로에는 지금의 주소를 보여 주는 빈 화면을
-낸다. 백엔드로 넘길 때 하는 일은 다음과 같다.
+받아, `/api`로 시작하는 요청은 백엔드로 넘기고 그 밖의 경로에는 대역의 화면을 낸다. 화면에는 지금의
+주소와, 프론트엔드가 하는 일을 대신하는 세 버튼(Google로 로그인, 내 정보 확인, 로그아웃)이 있다.
+백엔드로 넘길 때 하는 일은 다음과 같다.
 
 - `Host`는 백엔드의 `호스트:포트`로 바꾼다. 프론트엔드의 개발 서버가 `changeOrigin: true`로 하는
   일이다(ADR-025). 그래서 돌아올 주소를 요청의 Host로 만드는 결함이 로컬에서도 드러난다(ADR-026).
@@ -70,6 +82,7 @@ compose로 서버를 띄우고, 허용 목록에 계정 A를 `user`로 넣은 �
 
 import argparse
 import asyncio
+import contextlib
 import hashlib
 import html
 import http.client
@@ -79,22 +92,26 @@ import socket
 import sys
 import threading
 import uuid
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Self
+from typing import Any, Self
 from urllib.parse import parse_qs, urlsplit
 
 import asyncpg
 
-if TYPE_CHECKING:
-    # 타입 확인에만 쓴다. Playwright는 브라우저를 모는 층이 부를 때에만 불러온다.
-    from playwright.async_api import Browser, BrowserContext, Page
-
 # 이 접두사로 시작하는 경로를 백엔드로 넘긴다. 프론트엔드의 개발 서버의 proxy 설정과 같은 꼴이다.
 API_PREFIX = "/api"
+
+# 대역의 화면이 부르는 경로와 점검이 기다리는 경로. docs/API.md 4.2절과 4.3절의 엔드포인트다.
+HEALTH_PATH = "/api/health"
+LOGIN_PATH = "/api/auth/google/login"
+CALLBACK_PATH = "/api/auth/google/callback"
+ME_PATH = "/api/me"
+LOGOUT_PATH = "/api/auth/logout"
 
 # 연결 하나에만 해당하는 헤더(RFC 9110 7.6.1). 대역 서버는 백엔드와 연결을 따로 맺으므로 넘기지
 # 않는다. `Connection` 헤더에 이름이 적힌 헤더도 함께 뺀다.
@@ -153,10 +170,193 @@ def _may_have_body(method: str, status: int) -> bool:
     return method != "HEAD" and not (100 <= status < 200 or status in (204, 304))
 
 
+# --- 대역 서버가 본 것 -----------------------------------------------------------------------
+#
+# 점검 스크립트는 브라우저를 조종하지 않는다(ADR-031). 브라우저가 받은 응답과 보낸 요청은 모두
+# 대역 서버를 지나므로, 대역 서버가 요청과 응답 하나마다 Exchange를 하나 기록하고 점검 스크립트가
+# 그것으로 브라우저를 따라간다. 쿠키의 값은 헤더를 읽는 자리에서 바로 SHA-256으로 바꾼다.
+
+
+def sha256_hex(value: str) -> str:
+    """서버가 token_hash를 만드는 방법(SHA-256의 16진수 소문자)과 같다."""
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+@dataclass(frozen=True)
+class SentCookie:
+    """브라우저가 요청에 붙인 쿠키 하나. 값은 담지 않고 SHA-256만 담는다(repr에도 넣지 않는다)."""
+
+    name: str
+    value_sha256: str = field(repr=False)
+
+
+@dataclass(frozen=True)
+class SetCookie:
+    """백엔드가 응답에 담은 `Set-Cookie` 하나.
+
+    값은 SHA-256만 담는다(repr에도 넣지 않는다). 읽지 못한 속성은 없는 것으로 둔다.
+    """
+
+    name: str
+    value_sha256: str = field(repr=False)
+    path: str | None
+    http_only: bool
+    secure: bool
+    same_site: str
+    max_age: int | None
+    expires: datetime | None
+
+
+@dataclass(frozen=True)
+class Exchange:
+    """대역 서버를 지난 요청 하나와 그 응답."""
+
+    # 대역 서버가 응답을 돌려주기 직전의 시각.
+    at: datetime
+    method: str
+    # `request_target`을 거친 요청의 대상. `/api` 아래는 쿼리를 담지 않는다.
+    target: str
+    # 브라우저가 화면을 옮긴 요청인가(`is_navigation`). 화면 안의 fetch는 아니다.
+    navigation: bool
+    sent: tuple[SentCookie, ...]
+    status: int
+    set_cookies: tuple[SetCookie, ...]
+    # 응답의 본문이 JSON 객체일 때만 담는다. `GET /api/me`의 응답을 판정하려고 담는다.
+    body: dict[str, object] | None
+
+
+def parse_cookie_header(value: str | None) -> tuple[SentCookie, ...]:
+    """요청의 `Cookie` 헤더. `=`이 없는 조각은 쿠키가 아니므로 건너뛴다."""
+    cookies: list[SentCookie] = []
+    for part in (value or "").split(";"):
+        name, separator, cookie_value = part.strip().partition("=")
+        if separator and name.strip():
+            cookies.append(SentCookie(name.strip(), sha256_hex(cookie_value.strip())))
+    return tuple(cookies)
+
+
+_SAME_SITE = {"lax": "Lax", "strict": "Strict", "none": "None"}
+
+
+def parse_set_cookie(header: str) -> SetCookie:
+    """응답의 `Set-Cookie` 하나(RFC 6265 5.2). 속성의 이름은 대소문자를 가리지 않는다."""
+    pair, *attributes = header.split(";")
+    name, _, value = pair.partition("=")
+    path: str | None = None
+    http_only = secure = False
+    same_site = ""
+    max_age: int | None = None
+    expires: datetime | None = None
+    for attribute in attributes:
+        key, _, raw = attribute.partition("=")
+        key, raw = key.strip().lower(), raw.strip()
+        if key == "path":
+            # `/`로 시작하지 않는 Path는 없는 것으로 본다. 그때는 요청의 기본 경로를 쓴다.
+            path = raw if raw.startswith("/") else None
+        elif key == "httponly":
+            http_only = True
+        elif key == "secure":
+            secure = True
+        elif key == "samesite":
+            same_site = _SAME_SITE.get(raw.lower(), raw)
+        elif key == "max-age":
+            with contextlib.suppress(ValueError):
+                max_age = int(raw)
+        elif key == "expires":
+            with contextlib.suppress(TypeError, ValueError):
+                parsed = parsedate_to_datetime(raw)
+                expires = parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+    return SetCookie(
+        name=name.strip(),
+        value_sha256=sha256_hex(value.strip()),
+        path=path,
+        http_only=http_only,
+        secure=secure,
+        same_site=same_site,
+        max_age=max_age,
+        expires=expires,
+    )
+
+
+def _is_api(target: str) -> bool:
+    return urlsplit(target).path.startswith(API_PREFIX + "/")
+
+
+def request_target(raw: str) -> str:
+    """기록할 요청의 대상. `/api` 아래는 경로만 담는다.
+
+    로그인 결과 처리의 쿼리에는 Google의 `code`와 `state`가 있다. 화면의 주소는 쿼리까지 담는다.
+    점검 2는 `/login?error=NOT_ALLOWED`를 본다.
+    """
+    return urlsplit(raw).path if _is_api(raw) else raw
+
+
+def is_navigation(sec_fetch_dest: str | None, accept: str | None) -> bool:
+    """브라우저가 화면을 옮긴 요청인가.
+
+    `Sec-Fetch-Dest`를 보고, 그것을 보내지 않는 브라우저는 `Accept`에 text/html이 있는지로 가른다.
+    """
+    if sec_fetch_dest is not None:
+        return sec_fetch_dest == "document"
+    return accept is not None and "text/html" in accept
+
+
+def _json_object(content_type: str | None, content: bytes) -> dict[str, object] | None:
+    if (content_type or "").split(";")[0].strip().lower() != "application/json":
+        return None
+    try:
+        body = json.loads(content)
+    except ValueError:
+        return None
+    return body if isinstance(body, dict) else None
+
+
+# 대역의 화면. 사람이 터미널의 안내에 따라 버튼을 누른다(ADR-031). 로그인은 프론트엔드처럼 화면을
+# 로그인 시작 주소로 옮기고, 나머지는 쿠키를 붙이는 fetch로 부른다. 로그아웃 버튼은 로그아웃한 뒤 내
+# 정보를 한 번 더 확인한다(표의 "로그아웃 후").
+_PAGE = """<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>프론트엔드 대역</title></head>
+<body>
+<h1>프론트엔드 대역</h1>
+<p>로컬 로그인 점검의 화면입니다. 터미널의 안내에 따라 버튼을 누릅니다.</p>
+<p>지금 주소: <code id="address">__ADDRESS__</code></p>
+<p><a id="login" href="__LOGIN__">Google로 로그인</a></p>
+<p><button id="me" type="button">내 정보 확인</button>
+<button id="logout" type="button">로그아웃</button></p>
+<pre id="result"></pre>
+<script>
+const $ = (id) => document.getElementById(id);
+async function call(method, path) {
+  try {
+    const response = await fetch(path, { method, credentials: 'include' });
+    $("result").textContent += `${method} ${path} → ${response.status}\\n`;
+  } catch (error) {
+    $("result").textContent += `${method} ${path} → 보내지 못함\\n`;
+  }
+}
+$("me").onclick = () => call('GET', '__ME__');
+$("logout").onclick = () => call('POST', '__LOGOUT__').then(() => call('GET', '__ME__'));
+</script>
+</body></html>
+"""
+
+
+def _stand_in_page(address: str) -> str:
+    page = _PAGE.replace("__LOGIN__", LOGIN_PATH).replace("__ME__", ME_PATH)
+    # 주소는 마지막에 넣는다. 주소에 든 글자가 다른 자리표시로 읽히지 않게 하기 위해서다.
+    return page.replace("__LOGOUT__", LOGOUT_PATH).replace("__ADDRESS__", html.escape(address))
+
+
 class _StandInServer(ThreadingHTTPServer):
-    def __init__(self, address: tuple[str, int], backend: _Backend) -> None:
+    def __init__(
+        self,
+        address: tuple[str, int],
+        backend: _Backend,
+        observe: Callable[[Exchange], None] | None,
+    ) -> None:
         super().__init__(address, _StandInHandler)
         self.backend = backend
+        self.observe = observe
 
 
 class _StandInHandler(BaseHTTPRequestHandler):
@@ -171,6 +371,36 @@ class _StandInHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:
         # 요청 줄을 찍지 않는다. 로그인 결과 처리의 요청 줄에는 Google의 `code`와 `state`가 있다.
         return
+
+    def _record(
+        self,
+        status: int,
+        set_cookies: Sequence[str] = (),
+        body: dict[str, object] | None = None,
+    ) -> None:
+        """이 요청과 그 응답을 기록한다. 응답을 돌려주기 전에 부른다.
+
+        응답을 받은 브라우저는 곧바로 다음 요청(결과 처리 뒤의 화면 등)을 보낸다. 그 요청은 다른
+        스레드가 받으므로, 응답을 돌려준 뒤에 기록하면 다음 요청이 먼저 기록될 수 있다.
+        """
+        server = self.server
+        assert isinstance(server, _StandInServer)
+        if server.observe is None:
+            return
+        server.observe(
+            Exchange(
+                at=datetime.now(UTC),
+                method=self.command,
+                target=request_target(self.path),
+                navigation=is_navigation(
+                    self.headers.get("Sec-Fetch-Dest"), self.headers.get("Accept")
+                ),
+                sent=parse_cookie_header("; ".join(self.headers.get_all("Cookie") or [])),
+                status=status,
+                set_cookies=tuple(parse_set_cookie(value) for value in set_cookies),
+                body=body,
+            )
+        )
 
     def _forward(self) -> None:
         server = self.server
@@ -209,6 +439,13 @@ class _StandInHandler(BaseHTTPRequestHandler):
         finally:
             conn.close()
 
+        content_type = next((v for k, v in headers if k.lower() == "content-type"), None)
+        self._record(
+            status,
+            [value for name, value in headers if name.lower() == "set-cookie"],
+            _json_object(content_type, content),
+        )
+
         # send_response는 Server와 Date를 덧붙이므로 쓰지 않는다. 백엔드가 보낸 헤더만 돌려준다.
         self.send_response_only(status, reason)
         response_dropped = _dropped_headers([v for k, v in headers if k.lower() == "connection"])
@@ -226,18 +463,12 @@ class _StandInHandler(BaseHTTPRequestHandler):
             self.wfile.write(content)
 
     def _page(self) -> None:
-        """지금의 주소(경로와 쿼리)를 보여 주는 빈 화면.
-
-        점검 스크립트가 이 화면에서 `fetch`를 부른다.
-        """
-        page = (
-            "<!doctype html>\n"
-            '<html lang="ko"><head><meta charset="utf-8"><title>프론트엔드 대역</title></head>\n'
-            f'<body><p id="address">{html.escape(self.path)}</p></body></html>\n'
-        )
-        self._send(200, "text/html; charset=utf-8", page)
+        """지금의 주소(경로와 쿼리)와 세 버튼이 있는 대역의 화면."""
+        self._record(200)
+        self._send(200, "text/html; charset=utf-8", _stand_in_page(self.path))
 
     def _plain(self, status: int, message: str) -> None:
+        self._record(status)
         self._send(status, "text/plain; charset=utf-8", message + "\n")
 
     def _send(self, status: int, content_type: str, text: str) -> None:
@@ -251,11 +482,23 @@ class _StandInHandler(BaseHTTPRequestHandler):
 
 
 class FrontendStandIn:
-    """프론트엔드의 개발 서버를 흉내 내는 대역 서버. 백그라운드 스레드에서 요청을 받는다."""
+    """프론트엔드의 개발 서버를 흉내 내는 대역 서버. 백그라운드 스레드에서 요청을 받는다.
 
-    def __init__(self, *, listen_host: str, listen_port: int, backend_url: str) -> None:
+    `observe`를 주면 요청과 응답 하나마다 `Exchange`를 하나 넘긴다. 요청을 받는 스레드에서 부르므로,
+    `observe`는 오래 걸리지 않아야 하고 다른 스레드에서 불려도 안전해야 한다.
+    """
+
+    def __init__(
+        self,
+        *,
+        listen_host: str,
+        listen_port: int,
+        backend_url: str,
+        observe: Callable[[Exchange], None] | None = None,
+    ) -> None:
         self._address = (listen_host, listen_port)
         self._backend = _Backend.parse(backend_url)
+        self._observe = observe
         self._server: _StandInServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -263,7 +506,7 @@ class FrontendStandIn:
         """포트를 잡고 백그라운드 스레드에서 요청을 받기 시작한다."""
         if self._server is not None:
             raise RuntimeError("대역 서버가 이미 떠 있다.")
-        server = _StandInServer(self._address, self._backend)
+        server = _StandInServer(self._address, self._backend, self._observe)
         thread = threading.Thread(
             target=server.serve_forever,
             kwargs={"poll_interval": SHUTDOWN_POLL_SECONDS},
@@ -299,11 +542,6 @@ class FrontendStandIn:
 SESSION_COOKIE = "diegesis_session"
 STATE_COOKIE = "diegesis_oauth_state"
 
-HEALTH_PATH = "/api/health"
-LOGIN_PATH = "/api/auth/google/login"
-CALLBACK_PATH = "/api/auth/google/callback"
-ME_PATH = "/api/me"
-LOGOUT_PATH = "/api/auth/logout"
 NOT_ALLOWED_PATH = "/login?error=NOT_ALLOWED"
 
 # compose는 서버에 LOGIN_SESSION_TTL_HOURS를 넘기지 않으므로 서버는 기본값을 쓴다
@@ -313,7 +551,7 @@ LOGIN_SESSION_TTL = timedelta(hours=336)
 TIME_TOLERANCE = timedelta(minutes=1)
 # 사람이 Google 화면에서 계정을 고를 때까지 기다리는 시간의 상한.
 LOGIN_WAIT_SECONDS = 300
-# 브라우저를 열기 전에 백엔드를 부를 때 기다리는 시간.
+# 점검을 시작하기 전에 백엔드를 부를 때 기다리는 시간.
 PREFLIGHT_TIMEOUT_SECONDS = 5
 
 # compose.yaml의 기본값과 db 서비스의 로컬 전용 계정.
@@ -458,7 +696,7 @@ def _parser() -> argparse.ArgumentParser:
             "  0  모든 시점의 상태가 표와 같다.\n"
             "  1  표와 다른 것이 있다.\n"
             "  2  명령의 인자가 잘못됐다.\n"
-            "  3  브라우저를 열기 전의 확인이 어긋났다. 고치는 방법을 보여 준다.\n"
+            "  3  점검을 시작하기 전의 확인이 어긋났다. 고치는 방법을 보여 준다.\n"
             "  4  점검을 끝내지 못했다(기다리는 시간이 지났거나 브라우저가 닫혔다)."
         ),
     )
@@ -490,7 +728,7 @@ def parse_args(argv: Sequence[str] | None = None) -> Args:
     return Args(allowed_email=allowed, denied_email=denied)
 
 
-# --- 브라우저를 열기 전의 확인 ---------------------------------------------------------------
+# --- 점검을 시작하기 전의 확인 ---------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -521,7 +759,7 @@ def login_redirect_problems(
     """`GET /api/auth/google/login`의 Location에서 redirect_uri와 client_id를 확인한다.
 
     서버와 이 스크립트의 `FRONTEND_URL`이 다르거나, `.env`에 Google 클라이언트의 값을 넣지 않고
-    compose를 띄웠으면 Google 화면까지 가서야 실패하므로 브라우저를 열기 전에 본다. Location의
+    compose를 띄웠으면 Google 화면까지 가서야 실패하므로 점검을 시작하기 전에 본다. Location의
     나머지(state, nonce, code_challenge)는 보지도 출력하지도 않는다.
     """
     restart = f"고친 뒤에는 서버가 새 값을 받도록 compose로 다시 띄운다({COMPOSE_UP})."
@@ -830,18 +1068,29 @@ class CookieState:
 
 @dataclass(frozen=True)
 class FetchResult:
-    """브라우저 안에서 부른 요청의 결과. body는 JSON 객체로 읽혔을 때만 있다."""
+    """화면 안에서 부른 요청의 결과. body는 JSON 객체로 읽혔을 때만 있다."""
 
     status: int
     body: dict[str, object] | None
 
 
 @dataclass(frozen=True)
+class SentCookies:
+    """한 요청에 브라우저가 붙인 쿠키의 이름들. 사람이 "쿠키가 없습니다"를 대조할 때 본다."""
+
+    request: str
+    names: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class BrowserState:
     url: str
+    # 대역 서버가 본 Set-Cookie대로라면 브라우저에 남아 있어야 할 쿠키(`CookieJar`).
     cookies: tuple[CookieState, ...]
     me: FetchResult | None = None
     logout_status: int | None = None
+    # 이 시점의 기준이 된 요청에 브라우저가 실제로 붙인 쿠키.
+    sent: SentCookies | None = None
 
     def cookies_named(self, name: str) -> tuple[CookieState, ...]:
         return tuple(cookie for cookie in self.cookies if cookie.name == name)
@@ -853,44 +1102,160 @@ class Snapshot:
     browser: BrowserState
 
 
-def _sha256(value: str) -> str:
-    # 서버가 token_hash를 만드는 방법(SHA-256의 16진수 소문자)과 같다.
-    return hashlib.sha256(value.encode()).hexdigest()
+def default_cookie_path(request_path: str) -> str:
+    """Path 속성이 없는 `Set-Cookie`의 경로(RFC 6265 5.1.4의 default-path)."""
+    if not request_path.startswith("/") or request_path.count("/") == 1:
+        return "/"
+    return request_path[: request_path.rindex("/")]
 
 
-def frontend_cookies(raw: Iterable[Mapping[str, object]], *, host: str) -> tuple[CookieState, ...]:
-    """Playwright가 돌려준 쿠키 가운데 프론트엔드 주소의 것만, 값을 SHA-256으로 바꿔 담는다.
+def cookie_path_matches(request_path: str, cookie_path: str) -> bool:
+    """브라우저가 이 경로의 요청에 그 경로의 쿠키를 붙이는가(RFC 6265 5.1.4의 path-match)."""
+    if request_path == cookie_path:
+        return True
+    return request_path.startswith(cookie_path) and (
+        cookie_path.endswith("/") or request_path[len(cookie_path)] == "/"
+    )
 
-    쿠키를 읽는 자리에서 바로 부른다. 값 자체는 돌려주는 것 어디에도 남지 않는다. Google의 쿠키는
-    프론트엔드의 것이 아니므로 해시도 남기지 않는다.
+
+@dataclass(frozen=True)
+class CookieMismatch:
+    """대역 서버가 센 쿠키와 브라우저가 요청에 붙인 쿠키가 다른 것 하나.
+
+    kind는 셋 가운데 하나다. missing은 붙여야 할 쿠키를 붙이지 않은 것, unexpected는 이번 점검에서
+    심지 않은 쿠키를 붙인 것, different는 붙인 쿠키의 값이 심은 값과 다른 것이다.
     """
-    return tuple(
-        CookieState(
-            name=str(cookie.get("name", "")),
-            path=str(cookie.get("path", "")),
-            http_only=bool(cookie.get("httpOnly")),
-            secure=bool(cookie.get("secure")),
-            same_site=str(cookie.get("sameSite", "")),
-            value_sha256=_sha256(str(cookie.get("value", ""))),
+
+    kind: str
+    name: str
+    request: str
+
+    def text(self) -> str:
+        if self.kind == "missing":
+            return (
+                f"브라우저: {self.request}에 {self.name} 쿠키를 붙이지 않았다. 대역 서버가 본 "
+                "Set-Cookie대로라면 붙어 있어야 한다."
+            )
+        if self.kind == "unexpected":
+            return (
+                f"브라우저: {self.request}에 이번 점검에서 심지 않은 {self.name} 쿠키를 붙였다. "
+                "새 게스트 창에서 시작했는지 확인한다."
+            )
+        return (
+            f"브라우저: {self.request}에 붙인 {self.name} 쿠키의 값이 대역 서버가 본 Set-Cookie의 "
+            "값과 다르다."
         )
-        for cookie in raw
-        if str(cookie.get("domain", "")).lstrip(".") == host
-    )
 
 
-def fetch_result(status: int, text: str) -> FetchResult:
-    try:
-        body = json.loads(text) if text else None
-    except ValueError:
-        body = None
-    return FetchResult(status=status, body=body if isinstance(body, dict) else None)
+class CookieJar:
+    """백엔드가 보낸 `Set-Cookie`를 브라우저처럼 쌓아, 브라우저에 남아 있어야 할 쿠키를 센다.
+
+    쿠키는 이름과 경로로 구별한다. 그래서 지우는 `Set-Cookie`는 이름과 경로가 모두 같을 때에만
+    지운다. 이름만 보고 지우면, 경로가 틀려 실제 브라우저에서는 지워지지 않는 쿠키를 지워졌다고
+    센다.
+    """
+
+    def __init__(self) -> None:
+        self._held: dict[tuple[str, str], tuple[CookieState, datetime | None]] = {}
+
+    def apply(self, exchange: Exchange) -> None:
+        request_path = urlsplit(exchange.target).path
+        for cookie in exchange.set_cookies:
+            path = cookie.path or default_cookie_path(request_path)
+            if cookie.max_age is not None:
+                expires_at = exchange.at + timedelta(seconds=cookie.max_age)
+            else:
+                expires_at = cookie.expires
+            key = (cookie.name, path)
+            if expires_at is not None and expires_at <= exchange.at:
+                self._held.pop(key, None)
+                continue
+            held = CookieState(
+                name=cookie.name,
+                path=path,
+                http_only=cookie.http_only,
+                secure=cookie.secure,
+                same_site=cookie.same_site,
+                value_sha256=cookie.value_sha256,
+            )
+            self._held[key] = (held, expires_at)
+
+    def cookies(self, at: datetime) -> tuple[CookieState, ...]:
+        """그 시각에 만료되지 않은 쿠키. 받은 순서대로다."""
+        return tuple(
+            cookie
+            for cookie, expires_at in self._held.values()
+            if expires_at is None or at < expires_at
+        )
+
+    def compare(self, exchange: Exchange) -> list[CookieMismatch]:
+        """요청에 브라우저가 붙인 쿠키를, 경로가 맞아 붙어 있어야 할 쿠키와 견준다."""
+        request_path = urlsplit(exchange.target).path
+        request = f"{exchange.method} {request_path}"
+        expected = [
+            cookie
+            for cookie in self.cookies(exchange.at)
+            if cookie_path_matches(request_path, cookie.path)
+        ]
+        mismatches: list[CookieMismatch] = []
+        for cookie in expected:
+            values = {sent.value_sha256 for sent in exchange.sent if sent.name == cookie.name}
+            if not values:
+                mismatches.append(CookieMismatch("missing", cookie.name, request))
+            elif cookie.value_sha256 not in values:
+                mismatches.append(CookieMismatch("different", cookie.name, request))
+        expected_names = {cookie.name for cookie in expected}
+        mismatches += [
+            CookieMismatch("unexpected", sent.name, request)
+            for sent in exchange.sent
+            if sent.name not in expected_names
+        ]
+        return mismatches
 
 
-def returned_to_frontend(url: str, frontend_url: str) -> bool:
-    """Google에서 프론트엔드의 화면(`/api` 밖의 경로)으로 돌아왔는지."""
-    return url.startswith(frontend_url + "/") and not urlsplit(url).path.startswith(
-        API_PREFIX + "/"
-    )
+class BrowserWatch:
+    """한 점검 동안 대역 서버를 지난 요청과 응답으로 브라우저를 따라간다. 점검마다 새로 만든다."""
+
+    def __init__(self, frontend_url: str) -> None:
+        self._frontend_url = frontend_url
+        self._jar = CookieJar()
+        self._url = ""
+        # 같은 쿠키의 같은 어긋남은 요청마다 되풀이되므로, 시점마다 처음 본 것 하나만 보고한다.
+        self._problems: dict[tuple[str, str], CookieMismatch] = {}
+
+    def observe(self, exchange: Exchange) -> None:
+        # 요청은 그 응답보다 먼저 갔으므로, 응답의 Set-Cookie를 반영하기 전의 셈과 견준다.
+        for mismatch in self._jar.compare(exchange):
+            self._problems.setdefault((mismatch.kind, mismatch.name), mismatch)
+        self._jar.apply(exchange)
+        if exchange.navigation and not _is_api(exchange.target):
+            self._url = self._frontend_url + exchange.target
+
+    def state(
+        self,
+        request: Exchange,
+        *,
+        me: FetchResult | None = None,
+        logout_status: int | None = None,
+    ) -> BrowserState:
+        """request를 기준으로 한 브라우저의 상태."""
+        sent = SentCookies(
+            f"{request.method} {urlsplit(request.target).path}",
+            tuple(cookie.name for cookie in request.sent),
+        )
+        return BrowserState(
+            url=self._url,
+            cookies=self._jar.cookies(request.at),
+            me=me,
+            logout_status=logout_status,
+            sent=sent,
+        )
+
+    def take_problems(self) -> list[str]:
+        """지난 시점 뒤로 본 쿠키의 어긋남. 돌려준 것은 비운다."""
+        problems = [mismatch.text() for mismatch in self._problems.values()]
+        self._problems.clear()
+        return problems
 
 
 def _display_url(url: str) -> str:
@@ -1216,12 +1581,15 @@ def render_snapshot(
             relation = _token_relation(session, browser)
             lines.append(f"  {label} {_row_text(session)}, {relation}")
     lines.append("브라우저")
-    lines.append(f"  주소: {_display_url(browser.url)}")
+    lines.append(f"  주소: {_display_url(browser.url) or '(아직 연 화면 없음)'}")
     if browser.cookies:
         lines.append("  쿠키:")
         lines.extend(f"    {_cookie_text(cookie)}" for cookie in browser.cookies)
     else:
         lines.append("  쿠키: 없음")
+    if browser.sent is not None:
+        names = ", ".join(browser.sent.names) or "없음"
+        lines.append(f"  보낸 쿠키({browser.sent.request}): {names}")
     if browser.me is not None:
         body = json.dumps(browser.me.body, ensure_ascii=False) if browser.me.body else ""
         lines.append(f"  GET {ME_PATH}: {browser.me.status} {body}".rstrip())
@@ -1231,7 +1599,7 @@ def render_snapshot(
 
 
 def render_preflight(problems: Sequence[PreflightProblem]) -> str:
-    lines = ["브라우저를 열기 전의 확인에서 어긋난 것이 있어, 브라우저를 열지 않고 끝낸다.", ""]
+    lines = ["점검을 시작하기 전의 확인에서 어긋난 것이 있어, 점검을 시작하지 않고 끝낸다.", ""]
     for number, problem in enumerate(problems, start=1):
         lines.append(f"{number}. {problem.problem}")
         lines.append("   고치는 방법:")
@@ -1248,7 +1616,7 @@ def render_report(mismatches: Sequence[str]) -> str:
     return "\n".join(lines)
 
 
-# --- 브라우저를 모는 층 ----------------------------------------------------------------------
+# --- 점검을 진행하는 층 ----------------------------------------------------------------------
 #
 # 아래는 위의 순수 함수들을 부르기만 한다. 판정과 출력의 규칙을 여기에 두지 않는다.
 
@@ -1278,7 +1646,7 @@ def _http_get(backend_url: str, path: str) -> tuple[int, str | None] | None:
 
 
 async def preflight(settings: CheckSettings, args: Args) -> list[PreflightProblem]:
-    """브라우저를 열기 전의 네 확인. 서버가 응답하지 않으면 나머지는 보지 않는다."""
+    """점검을 시작하기 전의 네 확인. 서버가 응답하지 않으면 나머지는 보지 않는다."""
     health = _http_get(settings.backend_url, HEALTH_PATH)
     problems = health_problems(health[0] if health else None, backend_url=settings.backend_url)
     if problems:
@@ -1329,69 +1697,71 @@ async def preflight(settings: CheckSettings, args: Args) -> list[PreflightProble
     return problems
 
 
-FETCH_SCRIPT = """
-async ([path, method]) => {
-  const response = await fetch(path, { method, credentials: 'include' });
-  return { status: response.status, body: await response.text() };
-}
-"""
+# 사람에게 하는 안내의 이름. 테스트는 이 이름으로 안내를 받은 사람을 흉내 낸다.
+STEP_OPEN = "open"
+STEP_REOPEN = "reopen"
+STEP_LOG_IN = "log_in"
+STEP_ME = "me"
+STEP_LOG_OUT = "log_out"
 
 
-async def _fetch(page: Page, path: str, method: str = "GET") -> FetchResult:
-    """프론트엔드가 하는 대로 브라우저 안에서 `credentials: 'include'`로 부른다."""
-    result = await page.evaluate(FETCH_SCRIPT, [path, method])
-    return fetch_result(int(result["status"]), str(result["body"]))
+def _ask(step: str, message: str) -> None:
+    """사람에게 다음에 할 일을 안내한다."""
+    print(f"\n>>> {message} (최대 {LOGIN_WAIT_SECONDS // 60}분 기다립니다)", flush=True)
 
 
-async def _browser_state(
-    page: Page,
-    context: BrowserContext,
-    settings: CheckSettings,
-    *,
-    me: FetchResult | None = None,
-    logout_status: int | None = None,
-) -> BrowserState:
-    # 쿠키를 읽는 자리에서 바로 해시로 바꾼다. 값은 이 줄을 벗어나지 않는다.
-    cookies = frontend_cookies(await context.cookies(), host=settings.frontend_host)
-    return BrowserState(url=page.url, cookies=cookies, me=me, logout_status=logout_status)
+def _is_me(exchange: Exchange) -> bool:
+    return (exchange.method, exchange.target) == ("GET", ME_PATH)
 
 
-async def _snapshot(
-    page: Page,
-    context: BrowserContext,
-    settings: CheckSettings,
-    args: Args,
-    *,
-    me: FetchResult | None = None,
-    logout_status: int | None = None,
-) -> Snapshot:
+def _is_logout(exchange: Exchange) -> bool:
+    return (exchange.method, exchange.target) == ("POST", LOGOUT_PATH)
+
+
+def _is_callback(exchange: Exchange) -> bool:
+    return (exchange.method, exchange.target) == ("GET", CALLBACK_PATH)
+
+
+def _is_page(exchange: Exchange) -> bool:
+    return exchange.navigation and not _is_api(exchange.target)
+
+
+async def _wait_for(
+    exchanges: asyncio.Queue[Exchange],
+    watch: BrowserWatch,
+    wanted: Callable[[Exchange], bool],
+    what: str,
+) -> Exchange:
+    """wanted에 맞는 요청이 대역 서버를 지나갈 때까지 기다린다.
+
+    그사이 지난 요청과 응답도 모두 watch에 넣는다. 쿠키의 셈은 빠짐없이 보아야 맞는다.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + LOGIN_WAIT_SECONDS
+    while True:
+        try:
+            exchange = await asyncio.wait_for(
+                exchanges.get(), timeout=max(deadline - loop.time(), 0)
+            )
+        except TimeoutError:
+            raise CheckAbortedError(
+                f"{LOGIN_WAIT_SECONDS // 60}분 안에 다음 요청이 대역 서버를 지나가지 않았다: "
+                f"{what}. "
+                "터미널의 안내대로 했는지 확인하고 다시 실행한다. Google이 로그인을 막았다면 그 "
+                "화면의 안내를 사람이 확인한다."
+            ) from None
+        watch.observe(exchange)
+        if wanted(exchange):
+            return exchange
+
+
+def _fetched(exchange: Exchange) -> FetchResult:
+    return FetchResult(status=exchange.status, body=exchange.body)
+
+
+async def _snapshot(settings: CheckSettings, args: Args, browser: BrowserState) -> Snapshot:
     db = await read_state(settings.database_url, emails=(args.allowed_email, args.denied_email))
-    browser = await _browser_state(page, context, settings, me=me, logout_status=logout_status)
     return Snapshot(db=db, browser=browser)
-
-
-async def _log_in(page: Page, settings: CheckSettings, *, label: str, email: str) -> datetime:
-    """프론트엔드가 하는 대로 화면을 로그인 시작 주소로 옮기고, 돌아올 때까지 기다린다."""
-    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
-
-    await page.goto(settings.frontend_url + LOGIN_PATH, wait_until="commit")
-    print(
-        f"\n>>> 브라우저의 Google 화면에서 계정 {label}({email})를 고르세요. 비밀번호를 물으면 "
-        f"브라우저에서 직접 넣습니다. 최대 {LOGIN_WAIT_SECONDS // 60}분 기다립니다.",
-        flush=True,
-    )
-    try:
-        await page.wait_for_url(
-            lambda url: returned_to_frontend(url, settings.frontend_url),
-            timeout=LOGIN_WAIT_SECONDS * 1000,
-        )
-    except PlaywrightTimeoutError:
-        raise CheckAbortedError(
-            f"{LOGIN_WAIT_SECONDS // 60}분 안에 {settings.frontend_url}로 돌아오지 않았다. "
-            "Google이 자동화된 브라우저의 로그인을 막았을 수 있다. 그 경우의 방법은 "
-            "docs/ADR.md의 ADR-026 재검토 조건에 따라 사람이 정한다."
-        ) from None
-    return datetime.now(UTC)
 
 
 def _report(title: str, snapshot: Snapshot, args: Args) -> None:
@@ -1408,96 +1778,137 @@ def _tagged(title: str, mismatches: list[str]) -> list[str]:
     return [f"[{title}] {mismatch}" for mismatch in mismatches]
 
 
-async def _check_allowed(browser: Browser, settings: CheckSettings, args: Args) -> list[str]:
+async def _check_allowed(
+    exchanges: asyncio.Queue[Exchange], settings: CheckSettings, args: Args
+) -> list[str]:
     """점검 1: 허용된 계정 A의 로그인과 로그아웃 (TC-1.7.3)."""
-    email = args.allowed_email
-    context = await browser.new_context()
-    try:
-        page = await context.new_page()
-        await page.goto(settings.frontend_url + "/")
+    email, frontend = args.allowed_email, settings.frontend_url
+    watch = BrowserWatch(frontend)
 
-        title = "점검 1 · 로그인 전"
-        before = await _snapshot(page, context, settings, args, me=await _fetch(page, ME_PATH))
-        _report(title, before, args)
-        mismatches = _tagged(title, judge_allowed_before_login(before, email=email))
+    title = "점검 1 · 로그인 전"
+    _ask(
+        STEP_OPEN,
+        f"브라우저에서 새 게스트 창을 열고(Chrome은 프로필 메뉴의 '게스트') {frontend}/ 를 연 뒤, "
+        "화면의 [내 정보 확인]을 누르세요.",
+    )
+    me = await _wait_for(exchanges, watch, _is_me, f"GET {ME_PATH}")
+    before = await _snapshot(settings, args, watch.state(me, me=_fetched(me)))
+    _report(title, before, args)
+    mismatches = _tagged(
+        title, judge_allowed_before_login(before, email=email) + watch.take_problems()
+    )
 
-        login_at = await _log_in(page, settings, label="A", email=email)
-        title = "점검 1 · 로그인 후"
-        after_login = await _snapshot(page, context, settings, args)
-        _report(title, after_login, args)
-        mismatches += _tagged(
-            title,
-            judge_allowed_after_login(
-                after_login,
-                before=before,
-                email=email,
-                login_at=login_at,
-                frontend_url=settings.frontend_url,
-            ),
+    title = "점검 1 · 로그인 후"
+    _ask(
+        STEP_LOG_IN,
+        f"화면의 [Google로 로그인]을 누르고, Google 화면에서 계정 A({email})를 고르세요. "
+        "비밀번호를 물으면 직접 넣습니다.",
+    )
+    callback = await _wait_for(
+        exchanges, watch, _is_callback, f"로그인 결과 처리(GET {CALLBACK_PATH})"
+    )
+    landing = await _wait_for(exchanges, watch, _is_page, "결과 처리가 보낸 화면")
+    after_login = await _snapshot(settings, args, watch.state(landing))
+    _report(title, after_login, args)
+    mismatches += _tagged(
+        title,
+        judge_allowed_after_login(
+            after_login,
+            before=before,
+            email=email,
+            login_at=callback.at,
+            frontend_url=frontend,
         )
+        + watch.take_problems(),
+    )
 
-        # 두 시점 사이에는 GET /api/me를 한 번 부른 것만 있다.
-        title = "점검 1 · 로그아웃 전"
-        me = await _fetch(page, ME_PATH)
-        before_logout = await _snapshot(page, context, settings, args, me=me)
-        _report(title, before_logout, args)
-        mismatches += _tagged(
-            title, judge_allowed_before_logout(before_logout, after_login=after_login, email=email)
-        )
+    # 두 시점 사이에는 GET /api/me를 한 번 부른 것만 있다.
+    title = "점검 1 · 로그아웃 전"
+    _ask(STEP_ME, "화면의 [내 정보 확인]을 누르세요.")
+    me = await _wait_for(exchanges, watch, _is_me, f"GET {ME_PATH}")
+    before_logout = await _snapshot(settings, args, watch.state(me, me=_fetched(me)))
+    _report(title, before_logout, args)
+    mismatches += _tagged(
+        title,
+        judge_allowed_before_logout(before_logout, after_login=after_login, email=email)
+        + watch.take_problems(),
+    )
 
-        title = "점검 1 · 로그아웃 후"
-        logout = await _fetch(page, LOGOUT_PATH, "POST")
-        me = await _fetch(page, ME_PATH)
-        after_logout = await _snapshot(
-            page, context, settings, args, me=me, logout_status=logout.status
-        )
-        _report(title, after_logout, args)
-        mismatches += _tagged(
-            title,
-            judge_allowed_after_logout(after_logout, before_logout=before_logout, email=email),
-        )
-        return mismatches
-    finally:
-        await context.close()
+    title = "점검 1 · 로그아웃 후"
+    _ask(
+        STEP_LOG_OUT,
+        "화면의 [로그아웃]을 누르세요. 화면이 로그아웃한 뒤 내 정보를 한 번 더 확인합니다.",
+    )
+    logout = await _wait_for(exchanges, watch, _is_logout, f"POST {LOGOUT_PATH}")
+    me = await _wait_for(exchanges, watch, _is_me, f"GET {ME_PATH}")
+    after_logout = await _snapshot(
+        settings, args, watch.state(me, me=_fetched(me), logout_status=logout.status)
+    )
+    _report(title, after_logout, args)
+    mismatches += _tagged(
+        title,
+        judge_allowed_after_logout(after_logout, before_logout=before_logout, email=email)
+        + watch.take_problems(),
+    )
+    return mismatches
 
 
-async def _check_denied(browser: Browser, settings: CheckSettings, args: Args) -> list[str]:
+async def _check_denied(
+    exchanges: asyncio.Queue[Exchange], settings: CheckSettings, args: Args
+) -> list[str]:
     """점검 2: 허용 목록 밖 계정 B의 로그인 시도 (TC-1.7.4)."""
-    email = args.denied_email
-    context = await browser.new_context()
-    try:
-        page = await context.new_page()
-        await page.goto(settings.frontend_url + "/")
+    email, frontend = args.denied_email, settings.frontend_url
+    # 새 게스트 창은 쿠키가 없는 브라우저이므로 새로 따라간다.
+    watch = BrowserWatch(frontend)
 
-        title = "점검 2 · 로그인 전"
-        before = await _snapshot(page, context, settings, args)
-        _report(title, before, args)
-        mismatches = _tagged(title, judge_denied_before_login(before, email=email))
+    title = "점검 2 · 로그인 전"
+    _ask(
+        STEP_REOPEN,
+        f"열려 있는 게스트 창을 모두 닫고, 새 게스트 창에서 {frontend}/ 를 연 뒤 "
+        "화면의 [내 정보 확인]을 누르세요.",
+    )
+    me = await _wait_for(exchanges, watch, _is_me, f"GET {ME_PATH}")
+    before = await _snapshot(settings, args, watch.state(me, me=_fetched(me)))
+    _report(title, before, args)
+    mismatches = _tagged(
+        title, judge_denied_before_login(before, email=email) + watch.take_problems()
+    )
 
-        await _log_in(page, settings, label="B", email=email)
-        title = "점검 2 · 로그인 시도 후"
-        after = await _snapshot(page, context, settings, args, me=await _fetch(page, ME_PATH))
-        _report(title, after, args)
-        mismatches += _tagged(
-            title,
-            judge_denied_after_attempt(
-                after, before=before, email=email, frontend_url=settings.frontend_url
-            ),
-        )
-        return mismatches
-    finally:
-        await context.close()
+    title = "점검 2 · 로그인 시도 후"
+    _ask(
+        STEP_LOG_IN,
+        f"화면의 [Google로 로그인]을 누르고, Google 화면에서 계정 B({email})를 고르세요. "
+        "계정 A가 보이면 '다른 계정 사용'을 고릅니다.",
+    )
+    await _wait_for(exchanges, watch, _is_callback, f"로그인 결과 처리(GET {CALLBACK_PATH})")
+    await _wait_for(exchanges, watch, _is_page, "결과 처리가 보낸 화면")
+    _ask(STEP_ME, "화면의 [내 정보 확인]을 누르세요.")
+    me = await _wait_for(exchanges, watch, _is_me, f"GET {ME_PATH}")
+    after = await _snapshot(settings, args, watch.state(me, me=_fetched(me)))
+    _report(title, after, args)
+    mismatches += _tagged(
+        title,
+        judge_denied_after_attempt(after, before=before, email=email, frontend_url=frontend)
+        + watch.take_problems(),
+    )
+    return mismatches
 
 
 async def run_checks(settings: CheckSettings, args: Args) -> list[str]:
-    """대역 서버와 화면이 보이는 브라우저를 띄워 두 점검을 차례로 하고, 표와 다른 것을 모은다."""
-    from playwright.async_api import Error as PlaywrightError
-    from playwright.async_api import async_playwright
+    """대역 서버를 띄우고 사람에게 안내하며 두 점검을 차례로 하고, 표와 다른 것을 모은다."""
+    loop = asyncio.get_running_loop()
+    exchanges: asyncio.Queue[Exchange] = asyncio.Queue()
+
+    def observe(exchange: Exchange) -> None:
+        # 대역 서버의 스레드에서 불린다. 점검이 끝나 이벤트 루프가 닫혔으면 버린다.
+        with contextlib.suppress(RuntimeError):
+            loop.call_soon_threadsafe(exchanges.put_nowait, exchange)
 
     stand_in = FrontendStandIn(
         listen_host=settings.frontend_host,
         listen_port=settings.frontend_port,
         backend_url=settings.backend_url,
+        observe=observe,
     )
     try:
         stand_in.start()
@@ -1506,28 +1917,12 @@ async def run_checks(settings: CheckSettings, args: Args) -> list[str]:
             f"대역 서버를 {settings.frontend_url}에 띄우지 못했다: {type(error).__name__}. "
             "프론트엔드의 개발 서버가 떠 있으면 끈다."
         ) from None
+    print(f"\n대역 서버가 {settings.frontend_url}에서 받고 있다.", flush=True)
     try:
-        async with async_playwright() as playwright:
-            try:
-                # 점검마다 새 컨텍스트를 만들고, 프로필을 디스크에 남기지 않는다.
-                browser = await playwright.chromium.launch(headless=False)
-            except PlaywrightError:
-                raise CheckAbortedError(
-                    "Chromium을 열지 못했다. 처음 한 번 `uv run playwright install chromium`으로 "
-                    "브라우저를 설치한다."
-                ) from None
-            try:
-                return [
-                    *await _check_allowed(browser, settings, args),
-                    *await _check_denied(browser, settings, args),
-                ]
-            finally:
-                await browser.close()
-    except PlaywrightError as error:
-        # 메시지에는 결과 처리의 주소(code와 state)가 들어 있을 수 있으므로 종류만 보여 준다.
-        raise CheckAbortedError(
-            f"브라우저가 닫혔거나 Playwright가 실패했다: {type(error).__name__}"
-        ) from None
+        return [
+            *await _check_allowed(exchanges, settings, args),
+            *await _check_denied(exchanges, settings, args),
+        ]
     except DATABASE_ERRORS as error:
         raise CheckAbortedError(
             f"점검 중에 개발용 데이터베이스를 읽지 못했다: {type(error).__name__}"

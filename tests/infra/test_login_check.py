@@ -331,10 +331,10 @@ class TestPages:
         assert f'href="{LOGIN_PATH}"' in page
         assert "credentials: 'include'" in page
         lines = page.splitlines()
-        [me_line] = [line for line in lines if 'getElementById("me")' in line]
+        [me_line] = [line for line in lines if '$("me")' in line]
         assert f"'GET', '{ME_PATH}'" in me_line
         # 로그아웃 버튼은 로그아웃한 뒤 내 정보를 한 번 더 확인한다(표의 "로그아웃 후").
-        [logout_line] = [line for line in lines if 'getElementById("logout")' in line]
+        [logout_line] = [line for line in lines if '$("logout")' in line]
         logout_at = logout_line.index(f"'POST', '{LOGOUT_PATH}'")
         assert logout_line.index(f"'GET', '{ME_PATH}'") > logout_at
 
