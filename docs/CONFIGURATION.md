@@ -74,20 +74,14 @@ cp .env.example .env
 
 | 이름 | 뜻 | 기본값 | 예시 |
 | --- | --- | --- | --- |
-| `RECOMMENDATION_TOP_K` | 벡터 검색으로 가져올 후보 구간의 수입니다. 한 곡에서 나온 여러 구간이 후보에 함께 들어갈 수 있습니다. 값이 클수록 다양한 곡이 나오지만 장면과 덜 어울리는 곡이 뽑힐 가능성도 커집니다. | `10` | `5` |
-| `RECOMMENDATION_SAMPLING` | 후보 가운데 한 구간을 뽑는 방법입니다. `uniform`은 모든 후보를 같은 확률로 뽑고, `weighted`는 장면과 더 가까운 구간을 더 높은 확률로 뽑습니다. | `uniform` | `weighted` |
-| `RECOMMENDATION_SAMPLING_TEMPERATURE` | `weighted`일 때 확률의 쏠림 정도를 정합니다. 값이 작을수록 가장 가까운 곡이 뽑힐 확률이 높아집니다. `uniform`일 때에는 쓰이지 않습니다. | `1.0` | `0.5` |
-| `AUTOPLAY_COOLDOWN_SECONDS` | 사용자가 곡을 중단한 뒤 새 곡을 자동으로 틀지 않는 시간(자동 재생 쉬는 시간)입니다. 초 단위입니다. | `300` (5분) | `600` |
-| `DEFAULT_STRATEGY` | 사용자가 설정을 바꾸기 전에 적용되는 선곡 방식입니다. `embedding`, `random`, `silent` 가운데 하나입니다. | `embedding` | `random` |
+| `RECOMMENDATION_TOP_K` | 위치 알림 응답에 담는 후보 구간의 최대 수입니다. 지정 곡의 후보도 이 수 안에 셉니다. 한 곡에서 나온 여러 구간이 후보에 함께 들어갈 수 있습니다. 값이 클수록 다양한 곡이 나오지만 장면과 덜 어울리는 곡이 재생될 가능성도 커지고, 사용자가 이 수만큼 싫어요를 눌러야 그 페이지의 음악이 멈춥니다. | `10` | `5` |
 | `DEFAULT_EMBEDDING_MODEL` | 사용자가 설정을 바꾸기 전에 적용되는 임베딩 모델의 이름입니다. 백엔드에 등록된 모델이어야 합니다. | `muq-mulan` | `laion-clap-music` |
-
-자동 재생 쉬는 시간의 길이는 PRD에서 아직 정해지지 않은 값입니다. 기본값인 5분은 임시로 넣은 값이므로, 팀에서 정한 뒤에 바꿔 주세요.
 
 ### 3.5 음원 저장소
 
 | 이름 | 뜻 | 기본값 | 예시 |
 | --- | --- | --- | --- |
-| `STORAGE_BACKEND` | 음원 파일을 어디에서 가져올지 정합니다. 로컬 개발에서는 `local`을 씁니다. 클라우드 저장소의 값은 인프라가 정해진 뒤에 추가합니다. | `local` | `local` |
+| `STORAGE_BACKEND` | 음원 파일을 어디에서 가져올지 정합니다. 로컬 개발에서는 `local`을 씁니다. 배포 환경의 저장소는 Cloudflare R2이며([ADR-023](ADR.md#adr-023-배포-인프라)), 그 값과 접속 정보는 음악 묶음을 적재하는 Epic(E5)에서 추가합니다. | `local` | `local` |
 | `STORAGE_LOCAL_DIR` | `STORAGE_BACKEND`가 `local`일 때 음원 파일이 들어 있는 폴더입니다. | `./var/audio` | `./var/audio` |
 | `STORAGE_LOCAL_BASE_URL` | `STORAGE_BACKEND`가 `local`일 때 브라우저가 음원을 받을 주소의 앞부분입니다. 이 값 뒤에 음원 파일의 이름, 만료 시각, 서명이 붙습니다. | `http://localhost:8080/api/dev/audio` | `http://localhost:8080/api/dev/audio` |
 | `STORAGE_LOCAL_SIGNING_KEY` | `STORAGE_BACKEND`가 `local`일 때 서명된 주소를 만드는 데 쓰는 비밀값입니다. 로컬 개발에서만 쓰이므로 기본값이 있습니다. | `local-dev-only` | `local-dev-only` |
@@ -123,9 +117,6 @@ LOGIN_SESSION_TTL_HOURS=336
 
 # 선곡
 RECOMMENDATION_TOP_K=10
-RECOMMENDATION_SAMPLING=uniform
-AUTOPLAY_COOLDOWN_SECONDS=300
-DEFAULT_STRATEGY=embedding
 DEFAULT_EMBEDDING_MODEL=muq-mulan
 
 # 음원 저장소

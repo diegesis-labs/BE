@@ -45,7 +45,7 @@ docker compose down                 # 서버와 데이터베이스를 내립니�
 
 서버의 로그에는 compose가 서버의 상태를 확인하려고 몇 초마다 보내는 헬스체크 요청이 함께 찍힙니다. 그래서 로그가 금방 길어지므로 `--tail`로 마지막 몇 줄만 보는 것이 편합니다.
 
-`docker compose ps -a`를 실행하면 `migrate` 서비스가 `Exited (0)`, 곧 종료된 상태로 보이며, 이것이 정상입니다. `migrate`는 서버와 같은 이미지로 마이그레이션을 한 번 실행하고 끝나는 서비스이고, 서버는 이 서비스가 성공한 뒤에야 뜹니다([docs/DECISIONS.md](docs/DECISIONS.md)의 D-40). 종료 코드가 0이 아니라면 마이그레이션이 실패한 것이므로 `docker compose logs migrate`로 원인을 봅니다.
+`docker compose ps -a`를 실행하면 `migrate` 서비스가 `Exited (0)`, 곧 종료된 상태로 보이며, 이것이 정상입니다. `migrate`는 서버와 같은 이미지로 마이그레이션을 한 번 실행하고 끝나는 서비스이고, 서버는 이 서비스가 성공한 뒤에야 뜹니다([docs/ADR.md](docs/ADR.md#adr-015-로컬-실행-구성과-헬스체크)의 ADR-015). 종료 코드가 0이 아니라면 마이그레이션이 실패한 것이므로 `docker compose logs migrate`로 원인을 봅니다.
 
 ### 데이터베이스의 데이터
 
@@ -74,8 +74,8 @@ $env:API_PORT="8081"; $env:DB_PORT="5433"; docker compose up --build -d --wait  
 ### 알아 둘 것
 
 - **`.env` 파일이 필요 없습니다.** 서버가 데이터베이스에 접속하는 주소는 `compose.yaml`이 컨테이너에 직접 넘기며, `.env`가 있더라도 그 안의 설정값은 컨테이너에 들어가지 않습니다. `.env`는 서버를 compose 밖에서 직접 실행할 때 쓰며, 설정값의 목록과 뜻은 [docs/CONFIGURATION.md](docs/CONFIGURATION.md#2-처음-시작할-때)에 있습니다.
-- **이미지는 compose로만 빌드합니다.** `docker build`를 직접 쓰지 않습니다. `docker build`로 만든 이미지가 로컬 이미지 저장소에 실리는지는 각자의 Docker builder 설정에 따라 다르지만, compose는 그 설정과 관계없이 이미지를 싣기 때문입니다([docs/DECISIONS.md](docs/DECISIONS.md)의 D-41). 자세한 규칙은 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#1-개발-환경-준비) 1절에 있습니다.
-- **CPU 아키텍처에 맞춰 따로 설정할 것은 없습니다.** compose는 각자의 컴퓨터에서 그 컴퓨터의 CPU 아키텍처로 이미지를 빌드하므로, Apple Silicon Mac과 Windows에서 같은 명령을 그대로 쓰면 됩니다. Docker Hub에는 CI가 `linux/amd64` 이미지만 올리지만, 그 이미지는 배포 환경에서 받는 것이므로 로컬 개발에는 받지 않습니다([docs/DECISIONS.md](docs/DECISIONS.md)의 D-37).
+- **이미지는 compose로만 빌드합니다.** `docker build`를 직접 쓰지 않습니다. `docker build`로 만든 이미지가 로컬 이미지 저장소에 실리는지는 각자의 Docker builder 설정에 따라 다르지만, compose는 그 설정과 관계없이 이미지를 싣기 때문입니다([docs/ADR.md](docs/ADR.md#adr-015-로컬-실행-구성과-헬스체크)의 ADR-015). 자세한 규칙은 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#1-개발-환경-준비) 1절에 있습니다.
+- **CPU 아키텍처에 맞춰 따로 설정할 것은 없습니다.** compose는 각자의 컴퓨터에서 그 컴퓨터의 CPU 아키텍처로 이미지를 빌드하므로, Apple Silicon Mac과 Windows에서 같은 명령을 그대로 쓰면 됩니다. Docker Hub에는 CI가 `linux/amd64` 이미지만 올리지만, 그 이미지는 배포 환경에서 받는 것이므로 로컬 개발에는 받지 않습니다([docs/ADR.md](docs/ADR.md#adr-014-ci-검사와-컨테이너-이미지)의 ADR-014).
 
 ## 백엔드가 하는 일
 
