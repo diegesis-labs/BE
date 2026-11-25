@@ -2,9 +2,9 @@
 
 - FakeIdentityProvider: IdentityProvider 포트(app/core/ports.py)의 가짜. Google에 닿지 않는다.
 - FakeAuthStore: AuthStore(app/auth/service.py)를 만족하는 메모리 저장소. 데이터베이스에 닿지
-  않는다.
+  않는다. 관문(app/core/gate.py)이 쓰는 find_active_login도 가진다.
 
-service의 단위 테스트와, 다음 step의 관문과 라우터의 테스트가 이 가짜를 쓴다.
+service, 관문, 라우터의 단위 테스트가 이 가짜를 쓴다.
 """
 
 from dataclasses import dataclass, replace
@@ -13,7 +13,7 @@ from typing import Any
 from urllib.parse import urlencode
 from uuid import UUID, uuid4
 
-from app.auth.repository import AllowedEmail, UserRecord
+from app.auth.repository import ActiveLogin, AllowedEmail, UserRecord
 from app.core.ports import Identity, LoginFailedError
 
 # docs/backlog/epic-1/testcase.md의 "정상 ID 토큰"과 같은 신원.
@@ -87,6 +87,7 @@ class FakeConstraintError(Exception):
 class FakeLoginSession:
     user_id: UUID
     expires_at: datetime
+    created_at: datetime
 
 
 @dataclass(frozen=True)
@@ -107,8 +108,11 @@ class FakeAuthStore:
       login_sessions.user_id는 있는 사용자(docs/ARCHITECTURE.md 6절).
     - 이메일은 받은 그대로 비교한다. 소문자로 바꾸는 것은 service의 일이다(AuthRepository와 같다).
     - "지금"은 이 컴퓨터의 시각이다. 만료 시각이 지금과 같거나 그보다 이르면 만료된 것이다.
+    - find_active_login은 읽기이므로 writes에 남기지 않고, 받은 해시를 lookups에 남긴다. 쿠키가
+      없을 때 "조회하지 않았다"를 lookups == []로 확인한다.
 
-    allow, put_user, put_login_session은 테스트가 준비할 때 쓰며 writes에 남기지 않는다.
+    allow, put_user, put_login_session은 테스트가 준비할 때 쓰며 writes에 남기지 않는다. 두 시각
+    (허용 목록에 들어간 시각과 로그인 상태를 만든 시각)을 주지 않으면 지금으로 정한다.
     """
 
     def __init__(self) -> None:
@@ -116,20 +120,36 @@ class FakeAuthStore:
         self.users: dict[UUID, UserRecord] = {}
         self.login_sessions: dict[str, FakeLoginSession] = {}
         self.writes: list[StoreWrite] = []
+        self.lookups: list[str] = []
 
     # --- 테스트의 준비 -------------------------------------------------------
 
-    def allow(self, email: str, role: str = "user") -> AllowedEmail:
+    def allow(
+        self, email: str, role: str = "user", *, created_at: datetime | None = None
+    ) -> AllowedEmail:
         _check_lowercase(email)
-        allowed = AllowedEmail(email=email, role=role, created_at=datetime.now(UTC))
+        allowed = AllowedEmail(
+            email=email,
+            role=role,
+            created_at=datetime.now(UTC) if created_at is None else created_at,
+        )
         self.allowed_emails[email] = allowed
         return allowed
 
     def put_user(self, email: str, google_sub: str, display_name: str | None = None) -> UserRecord:
         return self._insert_user(email=email, google_sub=google_sub, display_name=display_name)
 
-    def put_login_session(self, token_hash: str, user_id: UUID, expires_at: datetime) -> None:
-        self._insert_login_session(token_hash=token_hash, user_id=user_id, expires_at=expires_at)
+    def put_login_session(
+        self,
+        token_hash: str,
+        user_id: UUID,
+        expires_at: datetime,
+        *,
+        created_at: datetime | None = None,
+    ) -> None:
+        self._insert_login_session(
+            token_hash=token_hash, user_id=user_id, expires_at=expires_at, created_at=created_at
+        )
 
     # --- AuthStore ------------------------------------------------------------
 
@@ -163,6 +183,21 @@ class FakeAuthStore:
         )
         self._insert_login_session(token_hash=token_hash, user_id=user_id, expires_at=expires_at)
 
+    # --- 관문(app/core/gate.py) ------------------------------------------------
+
+    async def find_active_login(self, token_hash: str) -> ActiveLogin | None:
+        """AuthRepository.find_active_login과 같다. 만료된 로그인 상태는 없는 것으로 본다."""
+        self.lookups.append(token_hash)
+        session = self.login_sessions.get(token_hash)
+        if session is None or session.expires_at <= datetime.now(UTC):
+            return None
+        user = self.users[session.user_id]
+        return ActiveLogin(
+            user=user,
+            session_created_at=session.created_at,
+            allowed=self.allowed_emails.get(user.email),
+        )
+
     async def delete_login_session(self, token_hash: str) -> None:
         self._record("delete_login_session", token_hash=token_hash)
         self.login_sessions.pop(token_hash, None)
@@ -193,13 +228,22 @@ class FakeAuthStore:
         return user
 
     def _insert_login_session(
-        self, *, token_hash: str, user_id: UUID, expires_at: datetime
+        self,
+        *,
+        token_hash: str,
+        user_id: UUID,
+        expires_at: datetime,
+        created_at: datetime | None = None,
     ) -> None:
         if token_hash in self.login_sessions:
             raise FakeConstraintError("pk_login_sessions")
         if user_id not in self.users:
             raise FakeConstraintError("fk_login_sessions_user_id_users")
-        self.login_sessions[token_hash] = FakeLoginSession(user_id=user_id, expires_at=expires_at)
+        self.login_sessions[token_hash] = FakeLoginSession(
+            user_id=user_id,
+            expires_at=expires_at,
+            created_at=datetime.now(UTC) if created_at is None else created_at,
+        )
 
 
 def _check_lowercase(email: str) -> None:
