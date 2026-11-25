@@ -30,8 +30,10 @@ docs/backlog/epic-1/testcase.md의 "로컬 로그인 점검의 테이블 상태"
 
 - 주소는 브라우저가 마지막으로 연 화면(`/api` 밖의 경로)이다.
 - 쿠키와 그 속성은 백엔드가 보낸 `Set-Cookie`를 브라우저처럼 이름과 경로로 쌓아 센다(`CookieJar`).
-- 브라우저가 요청에 붙인 `Cookie`가 그 셈과 다르면 표와 다른 것으로 보고한다. 브라우저의 쿠키
-  저장소를 직접 읽지 못하므로, 브라우저가 쿠키를 받아들이지 않은 경우를 이것으로 잡는다.
+- 게스트 창의 화면 이동과 `/api` 요청에 붙은 `Cookie`가 그 셈과 다르면 표와 다른 것으로
+  보고한다. 브라우저의 쿠키 저장소를 직접 읽지 못하므로, 브라우저가 쿠키를 받아들이지 않은 경우를
+  이것으로 잡는다. 그 밖의 요청(다른 창의 탭이 보낸 아이콘이나 끈 Vite의 재연결 요청 같은 것)에
+  붙은 `Cookie`는 대조하지 않는다(ADR-032).
 
 ## 종료 코드
 
@@ -1318,7 +1320,7 @@ class BrowserWatch:
     def observe(self, exchange: Exchange) -> None:
         # 쿠키는 게스트 창의 화면 이동과 /api 요청에서만 대조한다. 대역 서버에는 다른 창에 남은 탭이
         # 보낸 요청(끈 Vite의 재연결 요청, 화면의 아이콘 같은 것)도 오는데, 거기 붙은 평소 창의
-        # 쿠키는 표의 브라우저가 아니다(3차 리뷰 COR-4).
+        # 쿠키는 표의 브라우저가 아니다(ADR-032).
         if exchange.navigation or _is_api(exchange.target):
             # 요청은 그 응답보다 먼저 갔으므로, 응답의 Set-Cookie를 반영하기 전의 셈과 견준다.
             for mismatch in self._jar_when_sent(exchange).compare(exchange):
