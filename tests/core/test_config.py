@@ -96,6 +96,21 @@ def test_database_url_missing_with_other_values_in_dotenv_still_fails(
     assert error_locations(excinfo.value) == [("database_url",)]
 
 
+def test_empty_database_url_fails_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """DATABASE_URL이 빈 값이면 설정을 읽는 순간 검증 오류가 난다(CONFIGURATION.md 1절, 3.2절).
+
+    빈 값을 받으면 서버가 뜨고 헬스체크도 200이지만, 데이터베이스를 쓰는 요청은 모두 500이 된다.
+    값이 잘못됐으면 시작하는 순간 알아야 한다.
+    """
+    set_required_env(monkeypatch)
+    monkeypatch.setenv("DATABASE_URL", "")
+
+    with pytest.raises(ValidationError) as excinfo:
+        get_settings()
+
+    assert error_locations(excinfo.value) == [("database_url",)]
+
+
 # --- TC-0.1.2 ---------------------------------------------------------------
 
 
