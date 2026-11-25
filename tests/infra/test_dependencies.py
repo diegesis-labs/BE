@@ -1,11 +1,11 @@
-"""의존성의 테스트 (ADR-026, ADR-028).
+"""의존성의 테스트 (ADR-028, ADR-031).
 
 서버의 이미지는 `uv sync --locked --no-dev`로 운영 의존성만 설치한다(Dockerfile). 그래서 서버가
 import하는 패키지가 개발 의존성에만 있으면, 테스트는 초록인데 운영 서버는 import에서 죽는다.
 Google 어댑터(app/adapters/google.py)는 httpx로 Google과 통신하므로 httpx가 운영 의존성이어야 한다.
 
-반대로 로컬 로그인 점검 스크립트(scripts/login_check.py)가 쓰는 Playwright는 서버의 이미지에
-들어가지 않도록 개발 의존성에만 둔다(ADR-026).
+로컬 로그인 점검은 브라우저를 자동화하지 않는다(ADR-031). 그래서 브라우저 자동화 도구는 어느
+의존성에도 두지 않는다.
 """
 
 import re
@@ -104,8 +104,11 @@ def test_no_oauth_or_jwt_library_is_a_dependency() -> None:
     assert OAUTH_OR_JWT_LIBRARIES.isdisjoint(dependencies), OAUTH_OR_JWT_LIBRARIES & dependencies
 
 
-def test_playwright_is_a_dev_dependency_only() -> None:
-    assert "playwright" in dev_dependencies()
-    assert "playwright" not in runtime_dependencies()
-    # 이미지가 실제로 설치하는 목록에도 들어가지 않는다.
-    assert "playwright" not in locked_runtime_dependencies()
+# 브라우저를 열거나 조종하는 도구. Google은 자동화로 조종되는 브라우저의 로그인을 막는다(ADR-031).
+BROWSER_AUTOMATION = frozenset({"playwright", "selenium", "pyppeteer", "undetected-chromedriver"})
+
+
+def test_no_browser_automation_tool_is_a_dependency() -> None:
+    dependencies = runtime_dependencies() | dev_dependencies() | locked_runtime_dependencies()
+
+    assert BROWSER_AUTOMATION.isdisjoint(dependencies), BROWSER_AUTOMATION & dependencies

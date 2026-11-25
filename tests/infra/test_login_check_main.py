@@ -1,22 +1,22 @@
 """`scripts/login_check.py`의 `main`이 어떤 종료 코드로 끝나는지의 테스트 (E1 S1.7, T1.7.2).
 
-E1 S1.7의 "못 박을 것"은 점검 전의 상태가 표와 다르면 브라우저를 열지 않고, 상태를 맞추는 SQL을
+E1 S1.7의 "못 박을 것"은 점검 전의 상태가 표와 다르면 점검을 시작하지 않고, 상태를 맞추는 SQL을
 보여 준 뒤 끝내라고 한다. T1.7.2는 표와 다른 것이 있으면 0이 아닌 종료 코드로 끝내라고 한다.
 `precheck`의 판정은 test_login_check_precheck.py(TC-1.7.2)가, 판정과 출력의 순수 함수는
 test_login_check_judge.py가 확인한다. 이 파일은 그 둘을 `main`까지 잇는 부분을 확인한다.
 
 - `preflight`는 명령의 인자로 받은 두 이메일로 `precheck`를 부르고, 그 결과를 어긋난 것의 목록에
   넣는다.
-- 브라우저를 열기 전의 확인에서 어긋난 것이 하나라도 있으면 `main`은 3으로 끝나고, 점검
-  (`run_checks`. 대역 서버와 브라우저를 띄우는 곳)을 시작하지 않는다. 어긋난 것과 맞추는 SQL은
-  출력에 그대로 나온다.
+- 점검을 시작하기 전의 확인에서 어긋난 것이 하나라도 있으면 `main`은 3으로 끝나고, 점검
+  (`run_checks`. 대역 서버를 띄우고 사람에게 안내하는 곳)을 시작하지 않는다. 어긋난 것과
+  맞추는 SQL은 출력에 그대로 나온다.
 - 점검이 표와 다른 것을 돌려주면 1, 없으면 0, 점검을 끝내지 못하면 4로 끝난다.
 
-네트워크, 데이터베이스, 브라우저에 닿는 함수(`_http_get`, `precheck`, `port_in_use`, `run_checks`)는
-monkeypatch로 가짜로 바꾸고, 불린 인자를 기록한다. 데이터베이스에 연결하는 가장 아래의 함수
-(`connect_read_only`)는 불리면 테스트가 실패하게 바꾼다. 가짜를 거치지 않고 데이터베이스에 닿는
-길이 생겨도 개발용 데이터베이스에 닿지 않고 바로 드러나게 하기 위해서다. 설정은 임시 폴더의
-`.env`에서 읽게 해서, 개발자의 `.env`와 환경변수가 결과를 바꾸지 않게 한다.
+네트워크, 데이터베이스, 대역 서버에 닿는 함수(`_http_get`, `precheck`, `port_in_use`,
+`run_checks`)는 monkeypatch로 가짜로 바꾸고, 불린 인자를 기록한다. 데이터베이스에 연결하는 가장
+아래의 함수(`connect_read_only`)는 불리면 테스트가 실패하게 바꾼다. 가짜를 거치지 않고
+데이터베이스에 닿는 길이 생겨도 개발용 데이터베이스에 닿지 않고 바로 드러나게 하기 위해서다. 설정은
+임시 폴더의 `.env`에서 읽게 해서, 개발자의 `.env`와 환경변수가 결과를 바꾸지 않게 한다.
 """
 
 import asyncio
@@ -54,7 +54,7 @@ BACKEND = f"http://localhost:{API_PORT}"
 DATABASE = f"postgresql://diegesis:diegesis@localhost:{DB_PORT}/diegesis"
 SETTINGS = CheckSettings(frontend_url=FRONTEND, api_port=API_PORT, db_port=DB_PORT)
 
-PREFLIGHT_HEADER = "브라우저를 열기 전의 확인에서 어긋난 것이 있어, 브라우저를 열지 않고 끝낸다."
+PREFLIGHT_HEADER = "점검을 시작하기 전의 확인에서 어긋난 것이 있어, 점검을 시작하지 않고 끝낸다."
 
 # precheck가 돌려주는 것과 같은 꼴의 맞지 않는 조건 두 개. 맞추는 SQL은 여러 줄이다.
 A_NOT_ALLOWED = PrecheckProblem(
@@ -137,7 +137,7 @@ def fakes(monkeypatch: pytest.MonkeyPatch, dotenv: Path) -> Fakes:
             return fakes.health
         if path == LOGIN_PATH:
             return fakes.login
-        raise AssertionError(f"브라우저를 열기 전의 확인이 모르는 경로를 불렀다: {path}")
+        raise AssertionError(f"점검을 시작하기 전의 확인이 모르는 경로를 불렀다: {path}")
 
     async def fake_precheck(
         database_url: str, *, allowed_email: str, denied_email: str
@@ -152,7 +152,7 @@ def fakes(monkeypatch: pytest.MonkeyPatch, dotenv: Path) -> Fakes:
         return fakes.port_busy
 
     async def fake_run_checks(settings: CheckSettings, args: Args) -> list[str]:
-        # 진짜 run_checks는 대역 서버를 띄우고 화면이 보이는 브라우저를 연다.
+        # 진짜 run_checks는 대역 서버를 띄우고 사람이 안내대로 할 때까지 기다린다.
         fakes.run_calls.append((settings, args))
         if fakes.run_error is not None:
             raise fakes.run_error
@@ -180,16 +180,16 @@ def shown_sql(sql: str) -> str:
 
 
 def assert_all_checks_ran(fakes: Fakes) -> None:
-    """브라우저를 열기 전의 네 확인을 모두 했다. 각 확인은 `.env`의 값과 명령의 인자를 썼다."""
+    """점검을 시작하기 전의 네 확인을 모두 했다. 각 확인은 `.env`의 값과 명령의 인자를 썼다."""
     assert fakes.http_calls == [(BACKEND, HEALTH_PATH), (BACKEND, LOGIN_PATH)]
     assert fakes.precheck_calls == [(DATABASE, A, B)]
     assert fakes.port_calls == [("localhost", 5199)]
 
 
-class TestPrecheckStopsBeforeBrowser:
+class TestPrecheckStopsBeforeChecks:
     """E1 S1.7 "못 박을 것", TC-1.7.2. 점검 전의 상태가 표와 다르면 SQL만 보여 주고 끝낸다."""
 
-    def test_precheck_problems_exit_3_show_sql_and_open_no_browser(
+    def test_precheck_problems_exit_3_show_sql_and_start_no_check(
         self, fakes: Fakes, capsys: pytest.CaptureFixture[str]
     ) -> None:
         fakes.precheck_result = [A_NOT_ALLOWED, B_ALLOWED]
@@ -198,7 +198,7 @@ class TestPrecheckStopsBeforeBrowser:
 
         out, err = capsys.readouterr()
         assert code == 3
-        assert fakes.run_calls == [], "점검 전의 상태가 다른데 브라우저를 여는 점검을 시작했다"
+        assert fakes.run_calls == [], "점검 전의 상태가 다른데 점검을 시작했다"
         assert_all_checks_ran(fakes)
         assert PREFLIGHT_HEADER in err
         # 다른 확인은 모두 통과했으므로, 어긋난 것은 precheck가 돌려준 두 조건뿐이다.
@@ -235,7 +235,7 @@ class TestPrecheckStopsBeforeBrowser:
 
 @dataclass(frozen=True)
 class Broken:
-    """브라우저를 열기 전의 확인 하나를 어긋나게 하는 가짜의 값과, 그때 보여야 하는 어긋난 것."""
+    """점검을 시작하기 전의 확인 하나를 어긋나게 하는 가짜의 값과, 그때 보여야 하는 어긋난 것."""
 
     changes: dict[str, object]
     problem: str
@@ -296,11 +296,11 @@ BROKEN = {
 }
 
 
-class TestOtherPreflightProblemsStopBeforeBrowser:
+class TestOtherPreflightProblemsStopBeforeChecks:
     """점검 전의 상태 말고 다른 확인(서버, Google 설정, 데이터베이스, 포트)이 어긋나도 3이다."""
 
     @pytest.mark.parametrize("name", list(BROKEN))
-    def test_exits_3_shows_problem_and_opens_no_browser(
+    def test_exits_3_shows_problem_and_starts_no_check(
         self, fakes: Fakes, capsys: pytest.CaptureFixture[str], name: str
     ) -> None:
         broken = BROKEN[name]
@@ -311,7 +311,7 @@ class TestOtherPreflightProblemsStopBeforeBrowser:
 
         out, err = capsys.readouterr()
         assert code == 3
-        assert fakes.run_calls == [], "확인이 어긋났는데 브라우저를 여는 점검을 시작했다"
+        assert fakes.run_calls == [], "확인이 어긋났는데 점검을 시작했다"
         assert PREFLIGHT_HEADER in err
         assert numbered(err) == [f"1. {broken.problem}"]
         assert "=== 결과" not in out

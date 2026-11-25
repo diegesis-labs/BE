@@ -1,7 +1,7 @@
 """`scripts/login_check.py`의 표 대조, 출력, 점검 전 확인의 테스트.
 
 점검 스크립트의 `main`은 실제 Google 계정과 사람이 필요하므로 검사에서 돌리지 않는다(ADR-026).
-그래서 판정과 출력은 Playwright와 데이터베이스에서 떼어 낸 순수 함수로 두었고, 이 파일은 그 함수들을
+그래서 판정과 출력은 대역 서버와 데이터베이스에서 떼어 낸 순수 함수로 두었고, 이 파일은 그 함수들을
 testcase.md의 "로컬 로그인 점검의 테이블 상태"의 두 표에 견준다.
 
 - 표와 같은 상태(점검 1의 네 시점, 점검 2의 두 시점)를 만들어 판정하면 다른 칸이 없다.
@@ -35,8 +35,6 @@ from scripts.login_check import (
     SessionRow,
     Snapshot,
     UserRow,
-    fetch_result,
-    frontend_cookies,
     frontend_port_problems,
     health_problems,
     judge_allowed_after_login,
@@ -54,7 +52,6 @@ from scripts.login_check import (
     render_report,
     render_snapshot,
     resolve_settings,
-    returned_to_frontend,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -476,34 +473,6 @@ class TestNoSecretsInOutput:
             text = repr(value)
             assert COOKIE_SHA256 not in text
 
-    def test_frontend_cookies_hash_value_at_once_and_keep_frontend_only(self) -> None:
-        raw = [
-            {
-                "name": "diegesis_session",
-                "value": COOKIE_VALUE,
-                "domain": "localhost",
-                "path": "/",
-                "expires": 1.0,
-                "httpOnly": True,
-                "secure": False,
-                "sameSite": "Lax",
-            },
-            {
-                "name": "SID",
-                "value": "google-cookie",
-                "domain": ".google.com",
-                "path": "/",
-                "expires": 1.0,
-                "httpOnly": True,
-                "secure": True,
-                "sameSite": "None",
-            },
-        ]
-        cookies = frontend_cookies(raw, host="localhost")
-        assert cookies == (session_cookie(),)
-        assert COOKIE_VALUE not in repr(cookies)
-        assert all(COOKIE_VALUE not in str(getattr(c, f)) for c in cookies for f in vars(c))
-
     def test_render_report(self) -> None:
         assert "같다" in render_report([])
         report = render_report(
@@ -512,7 +481,7 @@ class TestNoSecretsInOutput:
         assert "하나" in report and "둘" in report
 
 
-# --- 브라우저를 열기 전의 확인 ---------------------------------------------------------------
+# --- 점검을 시작하기 전의 확인 ---------------------------------------------------------------
 
 
 def location(**params: str) -> str:
@@ -698,45 +667,35 @@ class TestSettings:
         assert "--allowed-email" in result.stdout
         assert "--denied-email" in result.stdout
 
-    def test_returned_to_frontend(self) -> None:
-        assert returned_to_frontend(f"{FRONTEND}/", FRONTEND)
-        assert returned_to_frontend(f"{FRONTEND}/login?error=NOT_ALLOWED", FRONTEND)
-        assert not returned_to_frontend(
-            "https://accounts.google.com/o/oauth2/v2/auth?x=1", FRONTEND
-        )
-        assert not returned_to_frontend(f"{FRONTEND}/api/auth/google/callback?code=c", FRONTEND)
-        assert not returned_to_frontend("http://localhost:51730/", FRONTEND)
-
-    def test_fetch_result(self) -> None:
-        assert fetch_result(200, '{"email": "a"}') == FetchResult(200, {"email": "a"})
-        assert fetch_result(204, "") == FetchResult(204, None)
-        assert fetch_result(500, "[1]") == FetchResult(500, None)
-
 
 # --- 스크립트가 쓰지 않는 것 -----------------------------------------------------------------
 
-# 계정을 고르고 비밀번호를 넣는 일은 사람이 하며, 자동화 탐지를 피하는 옵션은 쓰지 않는다
-# (E1 S1.7 "못 박을 것", ADR-026). 쿠키 값이 담길 수 있는 파일(트레이스, HAR, 스크린숏, 영상)도
-# 남기지 않는다.
-FORBIDDEN = (
-    "launch_persistent_context",
-    "user_data_dir",
-    "AutomationControlled",
-    "stealth",
-    "headless=True",
-    ".fill(",
-    ".type(",
-    ".press(",
-    "keyboard",
-    "record_har",
-    "record_video",
-    ".tracing",
-    ".screenshot(",
-)
+# 스크립트는 브라우저를 열거나 조종하지 않는다(ADR-031). 사람이 연 브라우저에 연결하지도 않고,
+# 자동화 탐지를 피하는 옵션도 쓰지 않는다. Google 계정의 비밀번호는 사람만 다룬다(E1 S1.7의
+# "못 박을 것").
+BROWSER_MODULES = ("playwright", "selenium", "pyppeteer", "undetected_chromedriver", "webbrowser")
+FORBIDDEN = ("AutomationControlled", "stealth", "remote-debugging", "connect_over_cdp")
+
+
+def imported_modules(source: str) -> set[str]:
+    """소스가 import하는 모듈의 전체 이름. `from a.b import c`는 `a.b`로 센다."""
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            names.add(node.module)
+    return names
 
 
 def forbidden_in(source: str) -> list[str]:
-    found = [token for token in FORBIDDEN if token in source]
+    modules = imported_modules(source)
+    found = [
+        module
+        for module in BROWSER_MODULES
+        if any(name == module or name.startswith(module + ".") for name in modules)
+    ]
+    found += [token for token in FORBIDDEN if token in source]
     if "password" in source.lower():
         found.append("password")
     return found
@@ -746,30 +705,21 @@ class TestScriptSource:
     @pytest.mark.parametrize(
         ("source", "expected"),
         [
-            ("browser = await p.chromium.launch(headless=True)", ["headless=True"]),
-            (
-                "await p.chromium.launch_persistent_context(user_data_dir='x')",
-                ["launch_persistent_context", "user_data_dir"],
-            ),
-            ("await page.fill('#identifierId', email)", [".fill("]),
-            ("await page.keyboard.type('x')", [".type(", "keyboard"]),
+            ("from playwright.async_api import async_playwright", ["playwright"]),
+            ("def f():\n    import selenium.webdriver\n", ["selenium"]),
+            ("import webbrowser\nwebbrowser.open('http://localhost:5173/')", ["webbrowser"]),
             ("args=['--disable-blink-features=AutomationControlled']", ["AutomationControlled"]),
+            ("browser = await chromium.connect_over_cdp(url)", ["connect_over_cdp"]),
             ("parser.add_argument('--password')", ["password"]),
-            ("await context.tracing.start()", [".tracing"]),
-            ("browser = await p.chromium.launch(headless=False)", []),
+            ("import playwrightish", []),
+            ("from scripts import login_check", []),
         ],
     )
     def test_detector(self, source: str, expected: list[str]) -> None:
         assert forbidden_in(source) == expected
 
-    def test_script_has_no_forbidden_tokens(self) -> None:
+    def test_script_does_not_drive_a_browser(self) -> None:
         assert forbidden_in(SCRIPT.read_text(encoding="utf-8")) == []
-
-    def test_browser_is_visible_and_context_is_fresh(self) -> None:
-        # Playwright의 기본값은 화면이 보이지 않는 브라우저이므로, 명시했는지 본다.
-        source = SCRIPT.read_text(encoding="utf-8")
-        assert "headless=False" in source
-        assert ".new_context(" in source
 
     def test_script_has_main(self) -> None:
         tree = ast.parse(SCRIPT.read_text(encoding="utf-8"))
