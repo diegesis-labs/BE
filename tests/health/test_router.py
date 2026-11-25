@@ -6,7 +6,6 @@
 
 import socket
 from collections.abc import Iterator
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,9 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.config import get_settings
 from app.main import create_app
-
-# 닿을 수 없는 데이터베이스 주소. 포트 1에는 PostgreSQL이 없으므로 접속하면 곧바로 실패한다.
-UNREACHABLE_DATABASE_URL = "postgresql+asyncpg://u:p@127.0.0.1:1/x"
+from tests.support.settings import UNREACHABLE_DATABASE_URL
 
 
 @pytest.fixture
@@ -47,20 +44,6 @@ def test_health_is_not_served_without_api_prefix(client: TestClient) -> None:
 # --- TC-0.4.2 ---------------------------------------------------------------
 
 
-@pytest.fixture
-def unreachable_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """설정의 DATABASE_URL이 닿을 수 없는 주소를 가리키게 한다.
-
-    작업 경로를 빈 임시 폴더로 옮겨서 개발자의 `.env`(PORT, LOG_LEVEL 등)를 읽지 않게 한다.
-    """
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("DATABASE_URL", UNREACHABLE_DATABASE_URL)
-    monkeypatch.delenv("database_url", raising=False)
-    get_settings.cache_clear()
-    yield
-    get_settings.cache_clear()
-
-
 def record_database_access(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """데이터베이스에 닿으려는 시도를 기록한다. 시도는 막지 않고 그대로 진행시킨다.
 
@@ -86,10 +69,9 @@ def record_database_access(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return calls
 
 
-def test_health_does_not_touch_the_database(
-    unreachable_database: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # 전제: 앱이 설정을 읽는다면 닿을 수 없는 주소를 읽게 된다.
+def test_health_does_not_touch_the_database(app_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    # 전제: 앱이 설정을 읽는다면 닿을 수 없는 주소를 읽게 된다. app_env는 작업 경로를 빈 임시 폴더로
+    # 옮기고 DATABASE_URL을 닿을 수 없는 주소로 둔다(tests/conftest.py).
     assert get_settings().database_url == UNREACHABLE_DATABASE_URL
 
     # 예외를 테스트로 다시 던지지 않고, 서버가 보낸 응답을 그대로 받아서 비교한다.

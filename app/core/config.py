@@ -6,6 +6,7 @@
 from functools import cache
 from typing import Literal
 
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,6 +20,16 @@ class Settings(BaseSettings):
     port: int = 8080
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     database_url: str  # 기본값을 두지 않는다. 값이 없으면 설정을 읽는 순간 실패해야 한다.
+
+    frontend_url: str
+    google_client_id: str
+    google_client_secret: SecretStr
+    login_session_ttl_hours: int = Field(default=336)
+    login_cookie_name: str = "diegesis_session"
+
+    @property
+    def cookie_secure(self) -> bool:
+        return False
 
 
 @cache

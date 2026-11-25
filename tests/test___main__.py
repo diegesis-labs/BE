@@ -16,6 +16,14 @@ from pathlib import Path
 
 import pytest
 
+from tests.support.settings import (
+    SETTING_ENV_NAMES,
+    TEST_FRONTEND_URL,
+    TEST_GOOGLE_CLIENT_ID,
+    TEST_GOOGLE_CLIENT_SECRET,
+    UNREACHABLE_DATABASE_URL,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ENTRYPOINT = REPO_ROOT / "app" / "__main__.py"
 
@@ -51,9 +59,14 @@ logging.getLogger("uvicorn.access").info(
 
 
 def run_entrypoint(log_level: str, tmp_path: Path) -> str:
-    env = {key: value for key, value in os.environ.items() if key.upper() != "LOG_LEVEL"}
+    # 개발자의 셸에 있는 설정값이 결과를 바꾸지 않도록, 설정 클래스가 읽는 이름을 모두 빼고 필요한
+    # 값만 넣는다.
+    env = {key: value for key, value in os.environ.items() if key.upper() not in SETTING_ENV_NAMES}
     env["LOG_LEVEL"] = log_level
-    env["DATABASE_URL"] = "postgresql+asyncpg://u:p@127.0.0.1:1/x"
+    env["DATABASE_URL"] = UNREACHABLE_DATABASE_URL
+    env["FRONTEND_URL"] = TEST_FRONTEND_URL
+    env["GOOGLE_CLIENT_ID"] = TEST_GOOGLE_CLIENT_ID
+    env["GOOGLE_CLIENT_SECRET"] = TEST_GOOGLE_CLIENT_SECRET
     env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(REPO_ROOT), env.get("PYTHONPATH")]))
     # 빈 작업 경로에서 돌려 개발자의 `.env`를 읽지 않는다.
     result = subprocess.run(
