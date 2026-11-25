@@ -20,7 +20,8 @@ compose로 서버를 띄우고, 허용 목록에 계정 A를 `user`로 넣은 �
 게스트 창을 열고, 터미널의 안내에 따라 대역 서버의 화면(`FRONTEND_URL/`)에서 버튼을 누르고, Google
 화면에서 안내받은 계정을 고른다. 스크립트는 비밀번호를 받지 않는다. 그리고 시점마다 출력된 상태를
 docs/backlog/epic-1/testcase.md의 "로컬 로그인 점검의 테이블 상태"와 대조한다. 스크립트도 같은
-표로 판정해서, 다른 것을 끝에 모아 보여 준다.
+표로 판정해서, 다른 것을 끝에 모아 보여 준다. 다만 `display_name`이 계정 A의 Google 이름인지는
+스크립트가 알 수 없으므로, 그 칸은 사람이 출력을 보고 대조한다.
 
 ## 브라우저의 상태를 보는 방법
 
@@ -34,13 +35,14 @@ docs/backlog/epic-1/testcase.md의 "로컬 로그인 점검의 테이블 상태"
 
 ## 종료 코드
 
-- 0: 모든 시점의 상태가 표와 같다.
+- 0: 스크립트가 판정하는 칸이 모든 시점에서 표와 같다. `display_name`이 Google 이름인지는 사람이
+  본다.
 - 1: 표와 다른 것이 있다. 끝에 모아 보여 준다.
 - 2: 명령의 인자가 잘못됐다.
 - 3: 점검을 시작하기 전의 확인(서버, Google 설정, 점검 전의 테이블 상태, 포트)이 어긋났다.
   점검을 시작하지 않고, 어긋난 것과 고치는 방법을 보여 준다. 상태를 맞추는 SQL은 보여 주기만 한다.
 - 4: 점검을 끝내지 못했다. 안내한 요청이 기다리는 시간 안에 대역 서버를 지나가지 않았거나,
-  데이터베이스에 닿지 못했다.
+  데이터베이스에 닿지 못했다. 그때까지 표와 다른 것이 있었으면 그것도 보여 준다.
 
 ## 지키는 것
 
@@ -86,6 +88,7 @@ import contextlib
 import hashlib
 import html
 import http.client
+import itertools
 import json
 import os
 import socket
@@ -223,6 +226,12 @@ class Exchange:
     set_cookies: tuple[SetCookie, ...]
     # 응답의 본문이 JSON 객체일 때만 담는다. `GET /api/me`의 응답을 판정하려고 담는다.
     body: dict[str, object] | None
+    # 대역 서버가 이 요청을 받은 순번과 이 기록을 남긴 순번. 두 순번은 대역 서버의 카운터 하나에서
+    # 나온다. 그래서 브라우저가 이 요청을 보낼 때 이미 받은 응답은 received보다 작은 recorded를
+    # 가진다. 대역 서버를 거치지 않고 만든 기록에는 없다(None). 그때는 기록된 차례대로 보낸 것으로
+    # 본다.
+    received: int | None = None
+    recorded: int | None = None
 
 
 def parse_cookie_header(value: str | None) -> tuple[SentCookie, ...]:
@@ -279,7 +288,12 @@ def parse_set_cookie(header: str) -> SetCookie:
 
 
 def _is_api(target: str) -> bool:
-    return urlsplit(target).path.startswith(API_PREFIX + "/")
+    """대역 서버가 백엔드로 넘기는 요청의 대상(또는 주소)인가. 경로가 `/api`로 시작하면 그렇다.
+
+    넘기는 판정과, 기록과 출력에서 쿼리를 빼는 판정이 모두 이 함수 하나를 쓴다. 둘이 다르면 백엔드로
+    넘기면서 쿼리를 기록하는 틈이 생긴다(3차 리뷰 SEC-1).
+    """
+    return urlsplit(target).path.startswith(API_PREFIX)
 
 
 def request_target(raw: str) -> str:
@@ -357,11 +371,29 @@ class _StandInServer(ThreadingHTTPServer):
         super().__init__(address, _StandInHandler)
         self.backend = backend
         self.observe = observe
+        # 요청을 받은 순번과 기록을 남긴 순번을 매기는 카운터. 요청은 스레드마다 따로 받는다.
+        self._ticks = itertools.count(1)
+        self._lock = threading.Lock()
+
+    def tick(self) -> int:
+        with self._lock:
+            return next(self._ticks)
+
+    def record(self, make: Callable[[int], Exchange]) -> None:
+        """기록의 순번을 매겨 observe에 넘긴다. 순번을 매기는 것과 넘기는 것을 한 번에 해서, 넘기는
+        차례가 순번의 차례와 같게 한다."""
+        if self.observe is None:
+            return
+        with self._lock:
+            self.observe(make(next(self._ticks)))
 
 
 class _StandInHandler(BaseHTTPRequestHandler):
     def _handle(self) -> None:
-        if self.path.startswith(API_PREFIX):
+        server = self.server
+        assert isinstance(server, _StandInServer)
+        self._received = server.tick()
+        if _is_api(self.path):
             self._forward()
         else:
             self._page()
@@ -385,10 +417,8 @@ class _StandInHandler(BaseHTTPRequestHandler):
         """
         server = self.server
         assert isinstance(server, _StandInServer)
-        if server.observe is None:
-            return
-        server.observe(
-            Exchange(
+        server.record(
+            lambda recorded: Exchange(
                 at=datetime.now(UTC),
                 method=self.command,
                 target=request_target(self.path),
@@ -399,6 +429,8 @@ class _StandInHandler(BaseHTTPRequestHandler):
                 status=status,
                 set_cookies=tuple(parse_set_cookie(value) for value in set_cookies),
                 body=body,
+                received=self._received,
+                recorded=recorded,
             )
         )
 
@@ -605,7 +637,8 @@ class CheckSettings:
 def parse_dotenv(text: str) -> dict[str, str]:
     """`.env`의 `이름=값` 줄을 읽는다. 빈 줄과 `#`으로 시작하는 줄은 건너뛴다.
 
-    값을 따옴표로 감쌌으면 따옴표를 벗기고, 감싸지 않았으면 ` #` 뒤의 줄 끝 주석을 뺀다.
+    값을 따옴표로 감쌌으면 닫는 따옴표까지가 값이고, 그 뒤(줄 끝 주석 등)는 compose처럼 버린다.
+    감싸지 않았으면 ` #` 뒤의 줄 끝 주석을 뺀다.
     """
     values: dict[str, str] = {}
     for raw in text.splitlines():
@@ -618,8 +651,8 @@ def parse_dotenv(text: str) -> dict[str, str]:
         name, value = name.strip(), value.strip()
         if not sep or not name:
             continue
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
-            value = value[1:-1]
+        if value[:1] in ("'", '"') and (closing := value.find(value[0], 1)) != -1:
+            value = value[1:closing]
         else:
             value = value.split(" #", 1)[0].rstrip()
         values[name] = value
@@ -683,21 +716,24 @@ def _parser() -> argparse.ArgumentParser:
         prog="login_check.py",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=(
-            "실제 Google 계정 두 개로 로컬의 로그인과 로그아웃을 점검한다(ADR-026).\n"
-            "compose로 띄운 서버 앞에 프론트엔드 대역 서버를 띄우고, 화면이 보이는 브라우저를\n"
-            "연다. "
-            "사람은 브라우저의 Google 화면에서 안내받은 계정을 고르기만 한다.\n"
-            "시점마다 세 테이블과 브라우저의 상태를 출력하고, testcase.md의 표와 대조한다."
+            "실제 Google 계정 두 개로 로컬의 로그인과 로그아웃을 점검한다(ADR-026, ADR-031).\n"
+            "compose로 띄운 서버 앞에 프론트엔드 대역 서버를 띄운다.\n"
+            "스크립트는 브라우저를 열거나 조종하지 않는다. 사람이 평소의 브라우저에서 점검마다\n"
+            "새 게스트 창을 열고, 터미널의 안내대로 대역 서버의 화면에서 버튼을 누르고, Google\n"
+            "화면에서 계정을 고른다. 스크립트는 시점마다 세 테이블과, 대역 서버가 본 브라우저의\n"
+            "상태를 출력하고 testcase.md의 표와 대조한다."
         ),
         epilog=(
             "FRONTEND_URL, API_PORT, DB_PORT는 환경변수, 레포 최상위의 .env, compose의 기본값의\n"
             "순서로 정한다.\n\n"
             "종료 코드:\n"
-            "  0  모든 시점의 상태가 표와 같다.\n"
+            "  0  스크립트가 판정하는 칸이 모든 시점에서 표와 같다. display_name이 계정 A의\n"
+            "     Google 이름인지는 사람이 출력을 보고 대조한다.\n"
             "  1  표와 다른 것이 있다.\n"
             "  2  명령의 인자가 잘못됐다.\n"
             "  3  점검을 시작하기 전의 확인이 어긋났다. 고치는 방법을 보여 준다.\n"
-            "  4  점검을 끝내지 못했다(기다리는 시간이 지났거나 브라우저가 닫혔다)."
+            "  4  점검을 끝내지 못했다. 안내한 요청이 기다리는 시간 안에 대역 서버를 지나가지\n"
+            "     않았거나, 데이터베이스에 닿지 못했다. 그때까지 표와 다른 것이 있었으면 보여 준다."
         ),
     )
     parser.add_argument(
@@ -1158,6 +1194,11 @@ class CookieJar:
     def __init__(self) -> None:
         self._held: dict[tuple[str, str], tuple[CookieState, datetime | None]] = {}
 
+    def copy(self) -> Self:
+        jar = type(self)()
+        jar._held = dict(self._held)
+        return jar
+
     def apply(self, exchange: Exchange) -> None:
         request_path = urlsplit(exchange.target).path
         for cookie in exchange.set_cookies:
@@ -1219,17 +1260,39 @@ class BrowserWatch:
     def __init__(self, frontend_url: str) -> None:
         self._frontend_url = frontend_url
         self._jar = CookieJar()
+        # 기록마다, 그 응답까지 반영한 셈. (기록의 순번, 셈)이다. 요청을 보낸 때의 셈을 찾는다.
+        self._history: list[tuple[int, CookieJar]] = []
         self._url = ""
         # 같은 쿠키의 같은 어긋남은 요청마다 되풀이되므로, 시점마다 처음 본 것 하나만 보고한다.
         self._problems: dict[tuple[str, str], CookieMismatch] = {}
 
     def observe(self, exchange: Exchange) -> None:
-        # 요청은 그 응답보다 먼저 갔으므로, 응답의 Set-Cookie를 반영하기 전의 셈과 견준다.
-        for mismatch in self._jar.compare(exchange):
-            self._problems.setdefault((mismatch.kind, mismatch.name), mismatch)
+        # 쿠키는 게스트 창의 화면 이동과 /api 요청에서만 대조한다. 대역 서버에는 다른 창에 남은 탭이
+        # 보낸 요청(끈 Vite의 재연결 요청, 화면의 아이콘 같은 것)도 오는데, 거기 붙은 평소 창의
+        # 쿠키는 표의 브라우저가 아니다(3차 리뷰 COR-4).
+        if exchange.navigation or _is_api(exchange.target):
+            # 요청은 그 응답보다 먼저 갔으므로, 응답의 Set-Cookie를 반영하기 전의 셈과 견준다.
+            for mismatch in self._jar_when_sent(exchange).compare(exchange):
+                self._problems.setdefault((mismatch.kind, mismatch.name), mismatch)
         self._jar.apply(exchange)
+        if exchange.recorded is not None:
+            self._history.append((exchange.recorded, self._jar.copy()))
         if exchange.navigation and not _is_api(exchange.target):
             self._url = self._frontend_url + exchange.target
+
+    def _jar_when_sent(self, exchange: Exchange) -> CookieJar:
+        """브라우저가 그 요청을 보낸 때까지 받은 응답만 반영한 셈.
+
+        브라우저가 함께 보낸 요청은 응답이 끝나는 차례가 보낸 차례와 다르다. 뒤에 보낸 요청의 응답이
+        먼저 끝나 쿠키를 지워도, 앞의 요청은 지우기 전에 보냈다(3차 리뷰 COR-2). 순번이 없는 기록은
+        기록된 차례대로 보냈다고 본다.
+        """
+        if exchange.received is None:
+            return self._jar
+        before = [
+            (recorded, jar) for recorded, jar in self._history if recorded < exchange.received
+        ]
+        return max(before, key=lambda item: item[0])[1] if before else CookieJar()
 
     def state(
         self,
@@ -1261,7 +1324,7 @@ class BrowserWatch:
 def _display_url(url: str) -> str:
     # `/api` 아래의 주소(로그인 결과 처리)는 쿼리에 Google의 code와 state가 있으므로 쿼리를 뺀다.
     parts = urlsplit(url)
-    if parts.path.startswith(API_PREFIX + "/") and parts.query:
+    if _is_api(url) and parts.query:
         return f"{parts.scheme}://{parts.netloc}{parts.path}?(쿼리 생략)"
     return url
 
@@ -1608,11 +1671,31 @@ def render_preflight(problems: Sequence[PreflightProblem]) -> str:
     return "\n".join(lines).rstrip()
 
 
+# 스크립트가 판정하지 못하는 칸. 스크립트는 계정 A의 Google 이름을 모른다. 결과는 이 칸까지 판정한
+# 것처럼 말하지 않는다(3차 리뷰 BEH-2).
+DISPLAY_NAME_NOTE = (
+    "users.display_name과 GET /api/me의 display_name이 계정 A의 Google 이름인지는 스크립트가 알 수 "
+    "없으므로, 시점마다 출력된 display_name을 보고 사람이 대조한다."
+)
+
+
 def render_report(mismatches: Sequence[str]) -> str:
     if not mismatches:
-        return "=== 결과\n모든 시점의 상태가 testcase.md의 표와 같다."
-    lines = [f"=== 결과\ntestcase.md의 표와 다른 것이 {len(mismatches)}개 있다."]
-    lines.extend(f"- {mismatch}" for mismatch in mismatches)
+        lines = ["=== 결과", "스크립트가 판정하는 칸은 모든 시점에서 testcase.md의 표와 같다."]
+    else:
+        lines = ["=== 결과", f"testcase.md의 표와 다른 것이 {len(mismatches)}개 있다."]
+        lines.extend(f"- {mismatch}" for mismatch in mismatches)
+    lines.append(DISPLAY_NAME_NOTE)
+    return "\n".join(lines)
+
+
+def render_partial_report(found: Sequence[str]) -> str:
+    """끝내지 못한 점검에서 그때까지 표와 다른 것. 점검을 끝내지 못했으므로 결과가 아니다."""
+    lines = [
+        "=== 끝내지 못한 점검의 중간 결과",
+        f"점검을 끝내기 전까지 testcase.md의 표와 다른 것이 {len(found)}개 있었다.",
+    ]
+    lines.extend(f"- {mismatch}" for mismatch in found)
     return "\n".join(lines)
 
 
@@ -1622,7 +1705,15 @@ def render_report(mismatches: Sequence[str]) -> str:
 
 
 class CheckAbortedError(Exception):
-    """점검을 끝내지 못했다. 메시지는 사람에게 보여 줄 안내다."""
+    """점검을 끝내지 못했다. 메시지는 사람에게 보여 줄 안내다.
+
+    found는 끝내기 전까지 모은 표와 다른 것이다. main이 4로 끝내기 전에 보여 준다. 쿠키의 대조
+    결과는 스냅숏에 찍히지 않으므로, 버리면 다시 볼 길이 없다(3차 리뷰 COR-3).
+    """
+
+    def __init__(self, message: str, *, found: Sequence[str] = ()) -> None:
+        super().__init__(message)
+        self.found = tuple(found)
 
 
 def _http_get(backend_url: str, path: str) -> tuple[int, str | None] | None:
@@ -1778,124 +1869,150 @@ def _tagged(title: str, mismatches: list[str]) -> list[str]:
     return [f"[{title}] {mismatch}" for mismatch in mismatches]
 
 
+async def _discard_pending(exchanges: asyncio.Queue[Exchange]) -> None:
+    """큐에 남은 기록을 버린다. 대역 서버의 스레드가 이미 넘긴 것까지 받은 다음에 버린다."""
+    await asyncio.sleep(0)
+    while not exchanges.empty():
+        exchanges.get_nowait()
+
+
 async def _check_allowed(
-    exchanges: asyncio.Queue[Exchange], settings: CheckSettings, args: Args
-) -> list[str]:
-    """점검 1: 허용된 계정 A의 로그인과 로그아웃 (TC-1.7.3)."""
+    exchanges: asyncio.Queue[Exchange], settings: CheckSettings, args: Args, found: list[str]
+) -> None:
+    """점검 1: 허용된 계정 A의 로그인과 로그아웃 (TC-1.7.3). 표와 다른 것은 found에 더한다.
+
+    끝내지 못하면, 그 시점에 이미 본 쿠키의 어긋남도 found에 더한 뒤 예외를 그대로 낸다.
+    """
     email, frontend = args.allowed_email, settings.frontend_url
     watch = BrowserWatch(frontend)
 
     title = "점검 1 · 로그인 전"
-    _ask(
-        STEP_OPEN,
-        f"브라우저에서 새 게스트 창을 열고(Chrome은 프로필 메뉴의 '게스트') {frontend}/ 를 연 뒤, "
-        "화면의 [내 정보 확인]을 누르세요.",
-    )
-    me = await _wait_for(exchanges, watch, _is_me, f"GET {ME_PATH}")
-    before = await _snapshot(settings, args, watch.state(me, me=_fetched(me)))
-    _report(title, before, args)
-    mismatches = _tagged(
-        title, judge_allowed_before_login(before, email=email) + watch.take_problems()
-    )
-
-    title = "점검 1 · 로그인 후"
-    _ask(
-        STEP_LOG_IN,
-        f"화면의 [Google로 로그인]을 누르고, Google 화면에서 계정 A({email})를 고르세요. "
-        "비밀번호를 물으면 직접 넣습니다.",
-    )
-    callback = await _wait_for(
-        exchanges, watch, _is_callback, f"로그인 결과 처리(GET {CALLBACK_PATH})"
-    )
-    landing = await _wait_for(exchanges, watch, _is_page, "결과 처리가 보낸 화면")
-    after_login = await _snapshot(settings, args, watch.state(landing))
-    _report(title, after_login, args)
-    mismatches += _tagged(
-        title,
-        judge_allowed_after_login(
-            after_login,
-            before=before,
-            email=email,
-            login_at=callback.at,
-            frontend_url=frontend,
+    try:
+        _ask(
+            STEP_OPEN,
+            f"브라우저에서 새 게스트 창을 열고(Chrome은 프로필 메뉴의 '게스트') {frontend}/ 를 연 "
+            "뒤, 화면의 [내 정보 확인]을 누르세요.",
         )
-        + watch.take_problems(),
-    )
+        me = await _wait_for(exchanges, watch, _is_me, f"GET {ME_PATH}")
+        before = await _snapshot(settings, args, watch.state(me, me=_fetched(me)))
+        _report(title, before, args)
+        found += _tagged(
+            title, judge_allowed_before_login(before, email=email) + watch.take_problems()
+        )
 
-    # 두 시점 사이에는 GET /api/me를 한 번 부른 것만 있다.
-    title = "점검 1 · 로그아웃 전"
-    _ask(STEP_ME, "화면의 [내 정보 확인]을 누르세요.")
-    me = await _wait_for(exchanges, watch, _is_me, f"GET {ME_PATH}")
-    before_logout = await _snapshot(settings, args, watch.state(me, me=_fetched(me)))
-    _report(title, before_logout, args)
-    mismatches += _tagged(
-        title,
-        judge_allowed_before_logout(before_logout, after_login=after_login, email=email)
-        + watch.take_problems(),
-    )
+        title = "점검 1 · 로그인 후"
+        _ask(
+            STEP_LOG_IN,
+            f"화면의 [Google로 로그인]을 누르고, Google 화면에서 계정 A({email})를 고르세요. "
+            "비밀번호를 물으면 직접 넣습니다.",
+        )
+        callback = await _wait_for(
+            exchanges, watch, _is_callback, f"로그인 결과 처리(GET {CALLBACK_PATH})"
+        )
+        landing = await _wait_for(exchanges, watch, _is_page, "결과 처리가 보낸 화면")
+        after_login = await _snapshot(settings, args, watch.state(landing))
+        _report(title, after_login, args)
+        found += _tagged(
+            title,
+            judge_allowed_after_login(
+                after_login,
+                before=before,
+                email=email,
+                login_at=callback.at,
+                frontend_url=frontend,
+            )
+            + watch.take_problems(),
+        )
 
-    title = "점검 1 · 로그아웃 후"
-    _ask(
-        STEP_LOG_OUT,
-        "화면의 [로그아웃]을 누르세요. 화면이 로그아웃한 뒤 내 정보를 한 번 더 확인합니다.",
-    )
-    logout = await _wait_for(exchanges, watch, _is_logout, f"POST {LOGOUT_PATH}")
-    me = await _wait_for(exchanges, watch, _is_me, f"GET {ME_PATH}")
-    after_logout = await _snapshot(
-        settings, args, watch.state(me, me=_fetched(me), logout_status=logout.status)
-    )
-    _report(title, after_logout, args)
-    mismatches += _tagged(
-        title,
-        judge_allowed_after_logout(after_logout, before_logout=before_logout, email=email)
-        + watch.take_problems(),
-    )
-    return mismatches
+        # 두 시점 사이에는 GET /api/me를 한 번 부른 것만 있다.
+        title = "점검 1 · 로그아웃 전"
+        _ask(STEP_ME, "화면의 [내 정보 확인]을 누르세요.")
+        me = await _wait_for(exchanges, watch, _is_me, f"GET {ME_PATH}")
+        before_logout = await _snapshot(settings, args, watch.state(me, me=_fetched(me)))
+        _report(title, before_logout, args)
+        found += _tagged(
+            title,
+            judge_allowed_before_logout(before_logout, after_login=after_login, email=email)
+            + watch.take_problems(),
+        )
+
+        title = "점검 1 · 로그아웃 후"
+        _ask(
+            STEP_LOG_OUT,
+            "화면의 [로그아웃]을 누르세요. 화면이 로그아웃한 뒤 내 정보를 한 번 더 확인합니다.",
+        )
+        logout = await _wait_for(exchanges, watch, _is_logout, f"POST {LOGOUT_PATH}")
+        me = await _wait_for(exchanges, watch, _is_me, f"GET {ME_PATH}")
+        after_logout = await _snapshot(
+            settings, args, watch.state(me, me=_fetched(me), logout_status=logout.status)
+        )
+        _report(title, after_logout, args)
+        found += _tagged(
+            title,
+            judge_allowed_after_logout(after_logout, before_logout=before_logout, email=email)
+            + watch.take_problems(),
+        )
+    except (CheckAbortedError, *DATABASE_ERRORS):
+        found += _tagged(title, watch.take_problems())
+        raise
 
 
 async def _check_denied(
-    exchanges: asyncio.Queue[Exchange], settings: CheckSettings, args: Args
-) -> list[str]:
-    """점검 2: 허용 목록 밖 계정 B의 로그인 시도 (TC-1.7.4)."""
+    exchanges: asyncio.Queue[Exchange], settings: CheckSettings, args: Args, found: list[str]
+) -> None:
+    """점검 2: 허용 목록 밖 계정 B의 로그인 시도 (TC-1.7.4). 표와 다른 것은 found에 더한다.
+
+    끝내지 못하면, 그 시점에 이미 본 쿠키의 어긋남도 found에 더한 뒤 예외를 그대로 낸다.
+    """
     email, frontend = args.denied_email, settings.frontend_url
     # 새 게스트 창은 쿠키가 없는 브라우저이므로 새로 따라간다.
     watch = BrowserWatch(frontend)
+    # 점검 1의 창이 남긴 요청(로그아웃을 두 번 누른 것 등)은 점검 2의 새 창이 보낸 것이 아니다.
+    # 그것을 점검 2의 대상으로 쓰면 새 창을 열기도 전에 판정하고 다음 안내로 넘어간다(3차 리뷰
+    # COR-1).
+    await _discard_pending(exchanges)
 
     title = "점검 2 · 로그인 전"
-    _ask(
-        STEP_REOPEN,
-        f"열려 있는 게스트 창을 모두 닫고, 새 게스트 창에서 {frontend}/ 를 연 뒤 "
-        "화면의 [내 정보 확인]을 누르세요.",
-    )
-    me = await _wait_for(exchanges, watch, _is_me, f"GET {ME_PATH}")
-    before = await _snapshot(settings, args, watch.state(me, me=_fetched(me)))
-    _report(title, before, args)
-    mismatches = _tagged(
-        title, judge_denied_before_login(before, email=email) + watch.take_problems()
-    )
+    try:
+        _ask(
+            STEP_REOPEN,
+            f"열려 있는 게스트 창을 모두 닫고, 새 게스트 창에서 {frontend}/ 를 연 뒤 "
+            "화면의 [내 정보 확인]을 누르세요.",
+        )
+        me = await _wait_for(exchanges, watch, _is_me, f"GET {ME_PATH}")
+        before = await _snapshot(settings, args, watch.state(me, me=_fetched(me)))
+        _report(title, before, args)
+        found += _tagged(
+            title, judge_denied_before_login(before, email=email) + watch.take_problems()
+        )
 
-    title = "점검 2 · 로그인 시도 후"
-    _ask(
-        STEP_LOG_IN,
-        f"화면의 [Google로 로그인]을 누르고, Google 화면에서 계정 B({email})를 고르세요. "
-        "계정 A가 보이면 '다른 계정 사용'을 고릅니다.",
-    )
-    await _wait_for(exchanges, watch, _is_callback, f"로그인 결과 처리(GET {CALLBACK_PATH})")
-    await _wait_for(exchanges, watch, _is_page, "결과 처리가 보낸 화면")
-    _ask(STEP_ME, "화면의 [내 정보 확인]을 누르세요.")
-    me = await _wait_for(exchanges, watch, _is_me, f"GET {ME_PATH}")
-    after = await _snapshot(settings, args, watch.state(me, me=_fetched(me)))
-    _report(title, after, args)
-    mismatches += _tagged(
-        title,
-        judge_denied_after_attempt(after, before=before, email=email, frontend_url=frontend)
-        + watch.take_problems(),
-    )
-    return mismatches
+        title = "점검 2 · 로그인 시도 후"
+        _ask(
+            STEP_LOG_IN,
+            f"화면의 [Google로 로그인]을 누르고, Google 화면에서 계정 B({email})를 고르세요. "
+            "계정 A가 보이면 '다른 계정 사용'을 고릅니다.",
+        )
+        await _wait_for(exchanges, watch, _is_callback, f"로그인 결과 처리(GET {CALLBACK_PATH})")
+        await _wait_for(exchanges, watch, _is_page, "결과 처리가 보낸 화면")
+        _ask(STEP_ME, "화면의 [내 정보 확인]을 누르세요.")
+        me = await _wait_for(exchanges, watch, _is_me, f"GET {ME_PATH}")
+        after = await _snapshot(settings, args, watch.state(me, me=_fetched(me)))
+        _report(title, after, args)
+        found += _tagged(
+            title,
+            judge_denied_after_attempt(after, before=before, email=email, frontend_url=frontend)
+            + watch.take_problems(),
+        )
+    except (CheckAbortedError, *DATABASE_ERRORS):
+        found += _tagged(title, watch.take_problems())
+        raise
 
 
 async def run_checks(settings: CheckSettings, args: Args) -> list[str]:
-    """대역 서버를 띄우고 사람에게 안내하며 두 점검을 차례로 하고, 표와 다른 것을 모은다."""
+    """대역 서버를 띄우고 사람에게 안내하며 두 점검을 차례로 하고, 표와 다른 것을 모은다.
+
+    끝내지 못하면 CheckAbortedError를 내고, 그때까지 모은 것을 그 예외의 found에 싣는다.
+    """
     loop = asyncio.get_running_loop()
     exchanges: asyncio.Queue[Exchange] = asyncio.Queue()
 
@@ -1918,17 +2035,19 @@ async def run_checks(settings: CheckSettings, args: Args) -> list[str]:
             "프론트엔드의 개발 서버가 떠 있으면 끈다."
         ) from None
     print(f"\n대역 서버가 {settings.frontend_url}에서 받고 있다.", flush=True)
+    found: list[str] = []
     try:
-        return [
-            *await _check_allowed(exchanges, settings, args),
-            *await _check_denied(exchanges, settings, args),
-        ]
+        await _check_allowed(exchanges, settings, args, found)
+        await _check_denied(exchanges, settings, args, found)
+    except CheckAbortedError as error:
+        raise CheckAbortedError(str(error), found=found) from None
     except DATABASE_ERRORS as error:
         raise CheckAbortedError(
-            f"점검 중에 개발용 데이터베이스를 읽지 못했다: {type(error).__name__}"
+            f"점검 중에 개발용 데이터베이스를 읽지 못했다: {type(error).__name__}", found=found
         ) from None
     finally:
         stand_in.stop()
+    return found
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1955,6 +2074,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         mismatches = asyncio.run(run_checks(settings, args))
     except CheckAbortedError as error:
+        if error.found:
+            print("\n" + render_partial_report(error.found), flush=True)
         print(f"\n점검을 끝내지 못했다. {error}", file=sys.stderr)
         return EXIT_ABORTED
 
