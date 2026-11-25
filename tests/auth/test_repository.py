@@ -290,6 +290,43 @@ async def test_create_user_inserts_a_row_and_returns_it(
     }
 
 
+@pytest.mark.parametrize(
+    ("email", "google_sub"),
+    [
+        pytest.param("reader@example.com", "sub-reader", id="same-pair"),
+        pytest.param("reader@example.com", "sub-other", id="same-email"),
+        pytest.param("other@example.com", "sub-reader", id="same-sub"),
+    ],
+)
+async def test_create_user_returns_none_without_error_when_email_or_sub_exists(
+    db_engine: AsyncEngine,
+    db_session_factory: async_sessionmaker[AsyncSession],
+    email: str,
+    google_sub: str,
+) -> None:
+    """1차 리뷰 COR-1. 쌍을 확인한 뒤 등록하기 전에 다른 요청이 같은 사람의 행을 먼저 만들 수 있다.
+
+    그때 고유 제약 위반을 내지 않고 None을 돌려주며, 같은 트랜잭션에서 다음 문장을 계속 쓸 수 있다.
+    기존 행은 바뀌지 않는다.
+    """
+    existing = await insert_user(db_engine, "reader@example.com", "sub-reader", "원래 이름")
+
+    async with db_session_factory() as session:
+        repository = AuthRepository(session)
+        created = await repository.create_user(
+            email=email, google_sub=google_sub, display_name="새 이름"
+        )
+        # 트랜잭션이 깨지지 않았다. 고유 제약 위반이면 이 질의가 실패한다.
+        found = await repository.find_users_by_email_or_sub(email=email, google_sub=google_sub)
+        await session.commit()
+
+    assert created is None
+    assert found == [existing]
+    assert {row[:4] for row in await user_rows(db_engine)} == {
+        (existing.id, "reader@example.com", "sub-reader", "원래 이름")
+    }
+
+
 async def test_update_display_name_changes_only_that_user(
     db_engine: AsyncEngine, db_session_factory: async_sessionmaker[AsyncSession]
 ) -> None:

@@ -22,6 +22,7 @@ from typing import Any
 
 import pytest
 
+from app.auth.repository import UserRecord
 from app.auth.service import AuthService, LoginRejected, LoginResult, LoginSucceeded
 from app.core import security
 from app.core.ports import LoginFailedError
@@ -298,6 +299,55 @@ async def test_rejects_when_only_email_or_only_sub_matches(
     assert result == LOGIN_FAILED
     assert store.writes == []
     assert store.users == {existing.id: existing}
+
+
+# --- 같은 사람의 첫 로그인이 겹칠 때 (1차 리뷰 COR-1) ----------------------
+#
+# 결과 처리 두 개가 함께 쌍을 확인해 행이 없다고 본 뒤, 한쪽이 먼저 사용자를 등록하는 경우다.
+# store.before_create_user로 "다른 요청이 쌍 확인과 등록 사이에 행을 만들었다"를 흉내 낸다.
+# 어떤 경우에도 고유 제약 위반이 밖으로 나가지 않는다(E1 S1.3).
+
+
+async def test_first_login_racing_with_same_person_uses_the_row_made_by_other_request(
+    store: FakeAuthStore, service: AuthService
+) -> None:
+    made_by_other: list[UserRecord] = []
+    store.before_create_user = lambda: made_by_other.append(
+        store.put_user("reader@example.com", "1234567890", "독자")
+    )
+
+    result = await complete(service)
+
+    assert isinstance(result, LoginSucceeded)
+    [other_user] = made_by_other
+    assert store.users == {other_user.id: other_user}
+    token_hash = security.hash_token(result.session_token)
+    assert set(store.login_sessions) == {token_hash}
+    assert store.login_sessions[token_hash].user_id == other_user.id
+
+
+@pytest.mark.parametrize(
+    ("email", "google_sub"),
+    [
+        pytest.param("reader@example.com", "sub-B", id="same-email-other-sub"),
+        pytest.param("other@example.com", "1234567890", id="same-sub-other-email"),
+    ],
+)
+async def test_first_login_racing_with_other_account_is_login_failed(
+    store: FakeAuthStore, service: AuthService, email: str, google_sub: str
+) -> None:
+    """겹친 요청이 만든 행이 이메일만 같거나 google_sub만 같으면 처음부터 있던 행처럼 거부한다."""
+    made_by_other: list[UserRecord] = []
+    store.before_create_user = lambda: made_by_other.append(store.put_user(email, google_sub))
+
+    result = await complete(service, current_session_token=OLD_SESSION_TOKEN)
+
+    assert result == LOGIN_FAILED
+    [other_user] = made_by_other
+    assert store.users == {other_user.id: other_user}
+    assert store.login_sessions == {}
+    # 등록을 시도한 것 말고는 쓰지 않는다. 옛 쿠키의 행도 지우지 않는다.
+    assert [write.method for write in store.writes] == ["create_user"]
 
 
 # --- 성공 -------------------------------------------------------------------

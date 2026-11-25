@@ -4,9 +4,15 @@
 """
 
 import copy
+import logging
 from typing import Any
 
 from uvicorn.config import LOGGING_CONFIG
+
+
+class AccessLogQueryFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return True
 
 
 def log_config(level: str) -> dict[str, Any]:

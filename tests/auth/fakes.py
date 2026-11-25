@@ -7,6 +7,7 @@
 service, 관문, 라우터의 단위 테스트가 이 가짜를 쓴다.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
@@ -113,6 +114,9 @@ class FakeAuthStore:
 
     allow, put_user, put_login_session은 테스트가 준비할 때 쓰며 writes에 남기지 않는다. 두 시각
     (허용 목록에 들어간 시각과 로그인 상태를 만든 시각)을 주지 않으면 지금으로 정한다.
+
+    before_create_user에 함수를 넣어 두면 create_user가 행을 넣기 직전에 부른다. 쌍을 확인한 뒤
+    등록하기 전에 겹친 다른 요청이 행을 먼저 만드는 경합을 흉내 낸다.
     """
 
     def __init__(self) -> None:
@@ -121,6 +125,7 @@ class FakeAuthStore:
         self.login_sessions: dict[str, FakeLoginSession] = {}
         self.writes: list[StoreWrite] = []
         self.lookups: list[str] = []
+        self.before_create_user: Callable[[], object] | None = None
 
     # --- 테스트의 준비 -------------------------------------------------------
 
@@ -167,6 +172,8 @@ class FakeAuthStore:
         self, *, email: str, google_sub: str, display_name: str | None
     ) -> UserRecord:
         self._record("create_user", email=email, google_sub=google_sub, display_name=display_name)
+        if self.before_create_user is not None:
+            self.before_create_user()
         return self._insert_user(email=email, google_sub=google_sub, display_name=display_name)
 
     async def update_display_name(self, user_id: UUID, display_name: str | None) -> None:

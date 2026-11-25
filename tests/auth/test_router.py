@@ -886,6 +886,24 @@ def test_openapi_lists_this_epics_routes_and_no_allowlist_api(client: TestClient
     assert me_schema["properties"]["role"]["enum"] == ["user", "admin"]
 
 
+def test_openapi_documents_callback_as_redirect_only(client: TestClient) -> None:
+    """1차 리뷰 ARC-1. 결과 처리는 리디렉션으로만 끝난다(docs/API.md 4.2절).
+
+    쿼리는 모두 선택이라 검증 실패(400 VALIDATION_ERROR)가 일어날 수 없으므로 문서에 싣지 않는다.
+    Google이 붙이는 쿼리 세 개는 선택인 매개변수로 문서에 남는다.
+    """
+    document = client.get("/api/openapi.json").json()
+    operation = document["paths"][CALLBACK_PATH]["get"]
+
+    assert set(operation["responses"]) == {"302"}
+    assert sorted(
+        (parameter["name"], parameter["in"], parameter["required"])
+        for parameter in operation["parameters"]
+    ) == [("code", "query", False), ("error", "query", False), ("state", "query", False)]
+    # 로그인 시작도 리디렉션으로만 끝난다.
+    assert set(document["paths"][LOGIN_PATH]["get"]["responses"]) == {"302"}
+
+
 # --- 의존 방향 --------------------------------------------------------------
 
 # 어댑터를 아는 곳은 app/main.py뿐이다. 라우터는 IdentityProvider 포트만 안다

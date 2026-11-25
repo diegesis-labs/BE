@@ -32,10 +32,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from app.auth.repository import AuthRepository, UserRecord, get_auth_repository
 from app.auth.router import get_identity_provider
-from app.core.database import create_engine
+from app.core.database import DbSession, create_engine
 from app.core.ports import Identity
 from app.main import create_app
 from tests.auth.fakes import READER_IDENTITY, FakeIdentityProvider
@@ -520,3 +521,76 @@ def test_commit_failure_sends_no_session_cookie(
     # 비교 대상: 신원은 허용 목록에 있으므로, 커밋이 되었다면 로그인에 성공했을 것이다.
     assert provider.identity == READER_IDENTITY
     assert len(provider.exchange_code_calls) == 1
+
+
+# --- 같은 사람의 첫 로그인이 겹칠 때 (1차 리뷰 COR-1) ----------------------
+
+
+class FindTogetherRepository(AuthRepository):
+    """처음의 쌍 확인을 겹친 요청 두 개가 모두 마칠 때까지 기다리는 repository.
+
+    두 요청이 모두 "행이 없다"를 본 뒤에야 등록으로 넘어가므로, 한쪽의 INSERT가 반드시 다른 쪽이
+    먼저 만든 행과 부딪힌다. 기다리는 것은 요청마다 처음의 조회 한 번뿐이다.
+    """
+
+    def __init__(self, session: AsyncSession, barrier: asyncio.Barrier) -> None:
+        super().__init__(session)
+        self._barrier = barrier
+        self._waited = False
+
+    async def find_users_by_email_or_sub(self, *, email: str, google_sub: str) -> list[UserRecord]:
+        users = await super().find_users_by_email_or_sub(email=email, google_sub=google_sub)
+        if not self._waited:
+            self._waited = True
+            await self._barrier.wait()
+        return users
+
+
+async def concurrent_callbacks(app: FastAPI, count: int) -> list[httpx.Response]:
+    """같은 신원의 결과 처리를 count개 함께 보낸다. 실제 서버처럼 예외는 500 응답으로 받는다."""
+    barrier = asyncio.Barrier(count)
+
+    def find_together_repository(session: DbSession) -> AuthRepository:
+        return FindTogetherRepository(session, barrier)
+
+    app.dependency_overrides[get_auth_repository] = find_together_repository
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    try:
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            # 기다림이 풀리지 않으면 테스트가 멈추지 않고 실패하게 한다.
+            async with asyncio.timeout(30):
+                return await asyncio.gather(
+                    *(
+                        client.get(
+                            CALLBACK_PATH,
+                            params={"code": CODE, "state": STATE},
+                            headers={"Cookie": f"{OAUTH_STATE_COOKIE}={STATE_COOKIE}"},
+                        )
+                        for _ in range(count)
+                    )
+                )
+    finally:
+        # ASGITransport는 앱의 수명 주기를 돌리지 않으므로, 앱이 만든 엔진을 직접 닫는다.
+        engine: AsyncEngine | None = getattr(app.state, "db_engine", None)
+        if engine is not None:
+            await engine.dispose()
+
+
+def test_concurrent_first_logins_of_same_person_both_succeed(
+    clean_db: str, provider: FakeIdentityProvider
+) -> None:
+    """E1 S1.3: 결과 처리는 어떤 경우에도 500으로 끝나지 않는다.
+
+    같은 사람의 첫 로그인 결과 처리 두 개가 겹치면, 늦게 등록하는 쪽은 먼저 만든 행으로 쌍을 다시
+    확인해 로그인한다. users의 행은 하나이고, 로그인 상태는 요청마다 하나씩 생긴다.
+    """
+    allow(clean_db, READER)
+
+    responses = asyncio.run(concurrent_callbacks(make_app(provider), 2))
+
+    tokens = [logged_in_token(response) for response in responses]
+    [user] = user_rows(clean_db)
+    assert (user["email"], user["google_sub"]) == (READER, READER_IDENTITY.sub)
+    assert login_session_hashes(clean_db) == {sha256(token) for token in tokens}
+    assert {row["user_id"] for row in login_session_rows(clean_db)} == {user["id"]}
+    assert len(provider.exchange_code_calls) == 2
