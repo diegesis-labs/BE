@@ -1,7 +1,8 @@
 # 1-login-allowlist 리뷰 처분 — 2차
 
 > `review-2.md`의 결함 11건(critical 0 · major 0 · minor 11)에 대한 처분. 2026-11-25.
-> 고친 것 8건, 기각 0건, 사람 판단 필요 3건.
+> 고친 것 11건, 기각 0건, 사람 판단 필요 0건.
+> 처음 처분에서는 8건을 고치고 BEH-1·BEH-2·ARC-4를 사람 판단으로 넘겼다. 사람이 정한 뒤(2026-11-25) 세 건을 고쳐 "고쳤다"로 옮겼다.
 
 ## 고쳤다
 
@@ -15,6 +16,9 @@
 | ARC-5 | minor | ARCHITECTURE 8절의 포트 표와 ADR-029의 재검토 조건에서 "전용 세션 저장소"를 "로그인 상태 전용 저장소"로 고쳤다. 낱말만 고쳤고 결정의 내용은 그대로다 | `eda2dd5` |
 | TST-1 | minor | `tests/infra/test_login_check_run.py`(18개). 표대로 움직이는 가짜 서버·DB·브라우저로 진짜 `run_checks`를 불러, 시점별 기준 스냅숏, 제목을 붙여 모으기, 실패를 `CheckAbortedError`로 바꾸기, 연 것을 닫기를 본다. `main`이 진짜 층의 결과로 0·1·4를 고르는지도 본다 | `4ed0616` `23be896` |
 | TST-2 | minor | `tests/auth/test_service.py::test_first_login_whose_raced_row_is_gone_is_login_failed`. 결과는 `LOGIN_FAILED`이고, 쓰기는 `create_user`뿐이며, 옛 쿠키의 행을 지우지 않는다 | `4ed0616` |
+| BEH-1 | minor | 사람이 A안(문서만)을 골랐다. API.md 4.2절의 동작 순서에 겹친 첫 로그인의 재확인 분기(`opt`)와 500 예외의 노트를 더하고, 마지막 노트를 "302 응답은 모두 `diegesis_oauth_state` 쿠키를 지웁니다"로 좁혔다. 코드는 그대로다. ADR-030의 비교와 결정에 "500에서는 쿠키를 심지도 지우지도 않는다"를 더했다. API.md의 mermaid 다섯 개가 모두 렌더링되는 것을 확인했다. API.md가 바뀌었으므로 PR에 프론트엔드의 리뷰가 필요하다 | `e803998` |
+| BEH-2 | minor | 사람이 B안(빈 값 거부)을 골랐다. `database_url: str = Field(min_length=1)`. 재현 테스트 `tests/core/test_config.py::test_empty_database_url_fails_validation`(RED에서 검증 오류 없이 통과함을 확인). CONFIGURATION 3.2절의 `DATABASE_URL` 행에 "빈 값이면 서버가 시작되지 않습니다"를 적었다. CONFIGURATION 1절의 기존 규칙을 따른 것이라 ADR은 더하지 않았다 | `9b19f03` `27a849f` `e803998` |
+| ARC-4 | minor | 사람이 A안(`core/ports.py`로 옮김)을 골랐다. `AuthStore`를 `app/core/ports.py`로 옮기고 service는 포트에서 가져온다. `tests/core/test_ports.py`가 app/ 아래의 Protocol이 `ports.py`에만 있는지(검출기의 자기 확인 포함)와 `AuthRepository`가 `AuthStore`·`LoginLookup`을 함께 만족하는지(pyright가 구조적으로 확인)를 본다. RED에서 `service.py`의 `AuthStore`를 잡는 것을 확인했다. ARCHITECTURE 8절의 포트 표와 설명, ADR-029의 비교·결정·재검토 조건에 더했다 | `9b19f03` `27a849f` `e803998` |
 
 ### ARC-1 상세
 
@@ -37,17 +41,11 @@
 
 ## 사람 판단 필요
 
-| ID | 심각도 | 무엇을 정해야 하는가 | 선택지 |
-|---|---|---|---|
-| BEH-1 | minor | API.md 4.2절의 동작 순서에 겹친 첫 로그인의 재확인 분기(E1 S1.3)와 커밋 실패의 500(ADR-030)이 없다. 또 500일 때 `diegesis_oauth_state`를 지우지 않아(`app/auth/router.py:168-170`은 302 응답에만 붙임) 315행 "모든 응답에서 지웁니다"와 어긋난다. 500에서 state 쿠키를 지울지는 어떤 문서도 정하지 않았다 | A: 문서만 고친다. 다이어그램에 두 분기를 더하고 315행을 "302 응답에서"로 좁힌다. 코드는 그대로이고 프론트엔드의 리뷰를 받는다 / B: A의 다이어그램에 더해, 500도 state 쿠키를 지우게 코드를 고친다(라우터의 오류 경로와 테스트, ADR-030 보강). 315행은 그대로 둔다 |
-| BEH-2 | minor | CONFIGURATION 3.2절의 `DATABASE_URL` 행에 빈 값의 동작이 없다. 지금은 빈 값을 받는다(`app/core/config.py:26`). 서버가 뜨고 `/api/health`는 200이지만, 데이터베이스를 쓰는 요청은 `ArgumentError`로 500이다(실측) | A: 지금 동작을 적는다. "빈 값도 받으며, 서버는 뜨지만 데이터베이스를 쓰는 요청은 실패합니다". 코드는 그대로 / B: 빈 값을 거부한다(`Field(min_length=1)`와 테스트). 문서에는 "빈 값이면 서버가 시작되지 않습니다"라고 적는다. CONFIGURATION 1절의 "값이 잘못됐으면 시작하는 순간 안다"와 맞는다 |
-| ARC-4 | minor | `AuthStore`(service가 저장소에 기대하는 Protocol)는 `app/auth/service.py:36`에 있고 ARCHITECTURE 8절의 포트 표에 없다. 기능 폴더 안에서만 쓰는 저장소 Protocol을 "포트"로 볼지 문서가 정하지 않았다(리포트도 추정으로 둠) | A: `app/core/ports.py`로 옮기고 포트 표에 행을 더한다. 기능 폴더가 늘면 그 폴더들의 저장소 Protocol도 core에 모인다. ADR 기록이 필요하다 / B: 그대로 두고, "기능 폴더 안에서만 쓰는 저장소 Protocol은 그 폴더의 service.py에 둔다"를 ARCHITECTURE 8절에 적는다. 근거는 ADR에 남긴다. 코드 변경은 없다 |
-
-세 건 모두 결정을 맡은 문서(API.md, CONFIGURATION.md, ARCHITECTURE.md와 ADR.md)를 고쳐야 닫히고, 어느 쪽이 맞는 동작인지 기존 문서가 정하지 않는다. 그래서 무인 처분이 고치지 않았다. BEH-1은 어느 안이든 API.md가 바뀌므로 PR에 프론트엔드의 리뷰가 필요하다(DEVELOPMENT 6.4절).
+없음. 처음 처분에서 넘긴 BEH-1, BEH-2, ARC-4는 사람이 정한 뒤 고쳐 "고쳤다"로 옮겼다. 그때 비교한 선택지와 고른 이유는 ADR-029(ARC-4), ADR-030(BEH-1), CONFIGURATION 1절(BEH-2)에 있다.
 
 ## 커밋
 
-`4ed0616` 테스트(TST-1 · TST-2 · ARC-1) · `26ab3cc` 테스트 구조(ARC-2 · ARC-3) · `23be896` RED(COR-1 · SEC-1) · `231ca08` 코드(COR-1 · SEC-1) · `eda2dd5` 문서(ARC-5 · ARC-2의 ADR-029 경로)
+`4ed0616` 테스트(TST-1 · TST-2 · ARC-1) · `26ab3cc` 테스트 구조(ARC-2 · ARC-3) · `23be896` RED(COR-1 · SEC-1) · `231ca08` 코드(COR-1 · SEC-1) · `eda2dd5` 문서(ARC-5 · ARC-2의 ADR-029 경로) · `9b19f03` RED(BEH-2 · ARC-4) · `27a849f` 코드(BEH-2 · ARC-4) · `e803998` 문서(BEH-1 · BEH-2 · ARC-4, ADR-029 · ADR-030)
 
 ## 검증
 
@@ -78,4 +76,4 @@
 
 없음
 
-<!-- disposition: fixed=8 rejected=0 needs-human=3 -->
+<!-- disposition: fixed=11 rejected=0 needs-human=0 -->
