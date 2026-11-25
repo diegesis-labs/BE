@@ -153,3 +153,8 @@ async def finish_google_login(
         "set-cookie", f"{OAUTH_STATE_COOKIE}=; Max-Age=0; Path={OAUTH_STATE_COOKIE_PATH}"
     )
     return response
+
+
+@router.post("/auth/logout", status_code=204)
+async def logout() -> Response:
+    return Response(status_code=204)

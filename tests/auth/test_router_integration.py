@@ -1,15 +1,21 @@
-"""로그인 결과 처리 경로와 실제 repository를 이은 통합 테스트.
+"""로그인, 로그아웃, 내 정보 경로와 실제 repository를 이은 통합 테스트.
 
 docs/backlog/epic-1/testcase.md의 S1.3 가운데 데이터베이스의 변화를 경로로 다시 확인한다(TC-1.3.1,
-TC-1.3.2, TC-1.3.7, TC-1.3.10, TC-1.3.14, TC-1.3.16). 그리고 커밋이 실패하면 로그인 상태의 쿠키가
-나가지 않는 것을 확인한다.
+TC-1.3.2, TC-1.3.7, TC-1.3.10, TC-1.3.11, TC-1.3.14 ~ TC-1.3.16). 그리고 커밋이 실패하면 로그인
+상태의 쿠키가 나가지 않는 것을 확인한다. 로그아웃과 내 정보는 S1.4의 TC-1.4.3(마지막 부분),
+TC-1.4.6, TC-1.4.8을 실제 로그인으로 확인한다.
+
+- 로그인 상태는 테이블에 직접 넣지 않고, 가짜 신원과 올바른 diegesis_oauth_state를 붙여 로그인 결과
+  처리 경로를 실제로 불러서 만든다.
+- SQL로 허용 목록이나 역할을 바꾸는 테스트는 앱과 TestClient를 다시 만들지 않는다. 앱이 허용
+  목록이나 역할을 메모리에 담아 두면 드러나야 하기 때문이다(ADR-024).
 
 - 앱은 create_app()으로 만들고, 신원만 app.dependency_overrides[get_identity_provider]로
   FakeIdentityProvider를 끼운다. 저장소와 트랜잭션은 실제의 것(get_auth_repository, DbSession)이다.
 - 준비와 확인은 앱과 다른 엔진으로, SQL 문장 하나마다 트랜잭션 하나로 한다. 만료 시각은
   데이터베이스의 now()를 기준으로 정한다.
 - 쿠키의 속성은 Set-Cookie 헤더를 직접 읽어서 확인한다. 요청의 쿠키는 Cookie 헤더로 직접 붙이고,
-  결과 처리를 부르기 전에 TestClient의 쿠키 저장소를 비운다.
+  요청을 보내기 전에 TestClient의 쿠키 저장소를 비운다.
 """
 
 import asyncio
@@ -38,6 +44,9 @@ from tests.support.settings import TEST_FRONTEND_URL
 pytestmark = pytest.mark.integration
 
 CALLBACK_PATH = "/api/auth/google/callback"
+LOGOUT_PATH = "/api/auth/logout"
+ME_PATH = "/api/me"
+EVIL_ORIGIN = "https://evil.example"
 OAUTH_STATE_COOKIE = "diegesis_oauth_state"
 SESSION_COOKIE = "diegesis_session"
 
@@ -83,8 +92,24 @@ def execute(url: str, statement: str, **params: Any) -> list[dict[str, Any]]:
     return asyncio.run(run())
 
 
-def allow(url: str, email: str) -> None:
-    execute(url, "INSERT INTO allowed_emails (email, role) VALUES (:email, 'user')", email=email)
+def allow(url: str, email: str, role: str = "user") -> None:
+    execute(
+        url,
+        "INSERT INTO allowed_emails (email, role) VALUES (:email, :role)",
+        email=email,
+        role=role,
+    )
+
+
+def disallow(url: str, email: str) -> None:
+    """그 사람의 allowed_emails 행만 지운다. 로그인 상태는 남긴다."""
+    execute(url, "DELETE FROM allowed_emails WHERE email = :email", email=email)
+
+
+def set_role(url: str, email: str, role: str) -> None:
+    execute(
+        url, "UPDATE allowed_emails SET role = :role WHERE email = :email", email=email, role=role
+    )
 
 
 def add_user(url: str, email: str, google_sub: str, display_name: str | None = None) -> uuid.UUID:
@@ -160,6 +185,40 @@ def logged_in_token(response: httpx.Response) -> str:
     assert_redirect(response, SUCCESS_LOCATION)
     [(token, _)] = session_cookies(response)
     return token
+
+
+def login(client: TestClient, *, session_cookie: str | None = None) -> str:
+    """로그인 결과 처리 경로를 불러 로그인하고, 새 로그인 상태의 쿠키 값을 돌려준다."""
+    return logged_in_token(callback(client, session_cookie=session_cookie))
+
+
+def me(client: TestClient, token: str) -> httpx.Response:
+    client.cookies.clear()
+    return client.get(ME_PATH, headers={"Cookie": f"{SESSION_COOKIE}={token}"})
+
+
+def logout(client: TestClient, token: str, *, origin: str = TEST_FRONTEND_URL) -> httpx.Response:
+    client.cookies.clear()
+    return client.post(
+        LOGOUT_PATH, headers={"Cookie": f"{SESSION_COOKIE}={token}", "Origin": origin}
+    )
+
+
+def assert_error(response: httpx.Response, status_code: int, code: str) -> None:
+    """API.md 2.3절의 형식({code, message})이며 code가 기대한 값이다."""
+    assert response.status_code == status_code, response.text
+    body = response.json()
+    assert set(body) == {"code", "message"}
+    assert body["code"] == code
+
+
+def assert_logged_out(response: httpx.Response) -> None:
+    """204이고 본문이 없으며, 로그인 상태의 쿠키를 지우는 Set-Cookie가 있다."""
+    assert response.status_code == 204, response.text
+    assert response.content == b""
+    [(value, attributes)] = session_cookies(response)
+    assert value == ""
+    assert sorted(attributes) == sorted(["HttpOnly", "SameSite=Lax", "Path=/", "Max-Age=0"])
 
 
 @pytest.fixture
@@ -260,6 +319,112 @@ def test_relogin_from_other_device_updates_name_and_keeps_both_login_sessions(
     rows = login_session_rows(clean_db)
     assert {row["token_hash"] for row in rows} == {sha256(first), sha256(second)}
     assert {row["user_id"] for row in rows} == {before["id"]}
+
+
+# --- TC-1.3.11 --------------------------------------------------------------
+
+
+def test_logout_deletes_only_the_attached_login_session(clean_db: str, client: TestClient) -> None:
+    """TC-1.3.11. 같은 사람이 두 기기에서 로그인한 뒤 한 기기에서 로그아웃한다."""
+    allow(clean_db, READER)
+    first = login(client)
+    second = login(client)
+
+    response = logout(client, first)
+
+    assert_logged_out(response)
+    assert_error(me(client, first), 401, "NOT_AUTHENTICATED")
+    assert me(client, second).status_code == 200
+    assert login_session_hashes(clean_db) == {sha256(second)}
+
+
+# --- TC-1.3.15 --------------------------------------------------------------
+
+
+def test_relogin_with_old_cookie_replaces_only_that_login_session(
+    clean_db: str, client: TestClient
+) -> None:
+    """TC-1.3.15. 쿠키 X를 붙인 채 다시 로그인하면 X의 행만 지워지고 다른 기기의 Z는 남는다."""
+    allow(clean_db, READER)
+    x = login(client)
+    z = login(client)
+
+    y = login(client, session_cookie=x)
+
+    assert_error(me(client, x), 401, "NOT_AUTHENTICATED")
+    assert me(client, y).status_code == 200
+    assert me(client, z).status_code == 200
+    assert login_session_hashes(clean_db) == {sha256(y), sha256(z)}
+
+
+# --- TC-1.4.3의 마지막 부분 -----------------------------------------------------
+
+
+def test_relogin_after_being_allowed_again_passes(clean_db: str, client: TestClient) -> None:
+    """TC-1.4.3. 허용 목록에서 뺐다가 다시 넣으면 옛 쿠키는 401이고, 다시 로그인한 쿠키는 200이다.
+
+    다시 넣은 뒤의 로그인은 옛 쿠키를 붙인 채 한다. 브라우저에 옛 쿠키가 남아 있기 때문이다.
+    """
+    allow(clean_db, READER)
+    old = login(client)
+    assert me(client, old).status_code == 200
+
+    disallow(clean_db, READER)
+    assert_error(me(client, old), 403, "NOT_ALLOWED")
+
+    allow(clean_db, READER)
+    assert_error(me(client, old), 401, "NOT_AUTHENTICATED")
+
+    new = login(client, session_cookie=old)
+    assert me(client, new).status_code == 200
+    assert_error(me(client, old), 401, "NOT_AUTHENTICATED")
+
+
+# --- TC-1.4.6 ---------------------------------------------------------------
+
+
+def test_me_returns_user_and_role_from_allowlist(clean_db: str, client: TestClient) -> None:
+    """TC-1.4.6. 역할은 요청마다 허용 목록에서 읽으므로 SQL로 바꾸면 다음 요청부터 바뀐다."""
+    allow(clean_db, READER, "admin")
+    token = login(client)
+    [user] = user_rows(clean_db)
+
+    response = me(client, token)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert set(body) == {"id", "email", "display_name", "role"}
+    assert body == {
+        "id": str(user["id"]),
+        "email": user["email"],
+        "display_name": "독자",
+        "role": "admin",
+    }
+
+    set_role(clean_db, READER, "user")
+    assert me(client, token).json()["role"] == "user"
+
+
+# --- TC-1.4.8 ---------------------------------------------------------------
+
+
+def test_logout_from_other_origin_is_rejected(clean_db: str, client: TestClient) -> None:
+    """TC-1.4.8. 공개 경로인 로그아웃도 출처 확인을 거친다."""
+    allow(clean_db, READER)
+    token = login(client)
+    before = login_session_rows(clean_db)
+
+    rejected = logout(client, token, origin=EVIL_ORIGIN)
+
+    assert_error(rejected, 403, "ORIGIN_MISMATCH")
+    assert session_cookies(rejected) == []
+    assert login_session_rows(clean_db) == before
+    assert me(client, token).status_code == 200
+
+    accepted = logout(client, token)
+
+    assert_logged_out(accepted)
+    assert login_session_rows(clean_db) == []
 
 
 # --- TC-1.3.14 --------------------------------------------------------------

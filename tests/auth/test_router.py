@@ -1,7 +1,8 @@
-"""로그인 시작과 로그인 결과 처리 경로(app/auth/router.py)의 단위 테스트.
+"""로그인, 로그아웃, 내 정보 경로(app/auth/router.py)의 단위 테스트.
 
 docs/backlog/epic-1/testcase.md의 S1.3 가운데 HTTP로 드러나는 것(상태 코드, Location, 쿠키의 속성)과
-TC-1.5.1, TC-1.2.1의 Host 부분을 확인한다. 동작 순서는 docs/API.md 4.2절이다.
+TC-1.5.1, TC-1.2.1의 Host 부분, TC-1.3.12, TC-1.5.3을 확인한다. 동작 순서는 docs/API.md 4.2절과
+4.3절이다.
 
 - 앱은 create_app()으로 만든다. 경로를 따로 만든 앱에만 붙여서 확인하면, create_app()이 경로를
   등록하지 않거나 어댑터를 잇지 않아도 초록이 되기 때문이다.
@@ -14,7 +15,8 @@ TC-1.5.1, TC-1.2.1의 Host 부분을 확인한다. 동작 순서는 docs/API.md 
   Secure, Max-Age를 보여 주지 않는다. 속성은 API.md 4.2절의 예시와 같은 표기로 비교한다.
 - 리디렉션을 따라가지 않는다. Location은 FRONTEND_URL을 붙인 전체 주소로 비교한다.
 - 요청의 쿠키는 Cookie 헤더로 직접 붙인다. 앞선 응답의 쿠키가 TestClient의 저장소에 남아 다음
-  요청에 저절로 붙지 않도록, 결과 처리를 부르기 전에 저장소를 비운다.
+  요청에 저절로 붙지 않도록, 결과 처리와 로그아웃과 내 정보를 부르기 전에 저장소를 비운다.
+- 로그아웃은 상태를 바꾸는 요청이므로 Origin: TEST_FRONTEND_URL을 붙인다(API.md 2.4절).
 """
 
 import ast
@@ -61,6 +63,8 @@ ROUTER_PATH = REPO_ROOT / "app" / "auth" / "router.py"
 
 LOGIN_PATH = "/api/auth/google/login"
 CALLBACK_PATH = "/api/auth/google/callback"
+LOGOUT_PATH = "/api/auth/logout"
+ME_PATH = "/api/me"
 GOOGLE_AUTHORIZATION_PREFIX = "https://accounts.google.com/o/oauth2/v2/auth?"
 
 OAUTH_STATE_COOKIE = "diegesis_oauth_state"
@@ -82,6 +86,9 @@ CODE = "routerGoogleCode5c3f"
 STATE_COOKIE = f"{STATE}.{NONCE}.{CODE_VERIFIER}"
 OTHER_STATE = "routerOtherState3d9a"
 OLD_SESSION_TOKEN = "routerOldSessionToken1a6b"
+# 저장소에 없는 로그인 상태의 쿠키 값.
+UNKNOWN_SESSION_TOKEN = "routerUnknownSessionToken8c2e"
+OTHER_DEVICE_TOKEN = "routerOtherDeviceToken4f7d"
 MATCHING_QUERY = {"code": CODE, "state": STATE}
 
 EXCHANGE_FAILURE_MESSAGE = "ID 토큰의 aud가 다름"
@@ -705,6 +712,178 @@ def test_success_logs_no_secrets(caplog: pytest.LogCaptureFixture, client: TestC
         session_cookie.value,
         security.hash_token(session_cookie.value),
     )
+
+
+# --- 로그아웃 ------------------------------------------------------------------
+
+
+def logout(
+    client: TestClient,
+    *,
+    session_cookie: str | None = None,
+    session_cookie_name: str = SESSION_COOKIE,
+    origin: str = TEST_FRONTEND_URL,
+) -> httpx.Response:
+    """로그아웃을 부른다. 출처 확인을 통과하도록 Origin을 붙인다."""
+    client.cookies.clear()
+    headers = {"Origin": origin}
+    if session_cookie is not None:
+        headers["Cookie"] = f"{session_cookie_name}={session_cookie}"
+    return client.post(LOGOUT_PATH, headers=headers)
+
+
+def deleted_session_cookie_attributes(*, secure: bool) -> list[str]:
+    """로그인 상태의 쿠키를 지울 때의 속성. 심을 때와 같은 Path, HttpOnly, SameSite, Secure다.
+
+    브라우저는 이름과 경로가 모두 같은 쿠키만 지우므로 Path=/가 빠지면 쿠키가 남는다.
+    """
+    return sorted(
+        ["HttpOnly", "SameSite=Lax", "Path=/", "Max-Age=0", *(["Secure"] if secure else [])]
+    )
+
+
+def assert_logged_out(
+    response: httpx.Response, *, secure: bool = False, cookie_name: str = SESSION_COOKIE
+) -> None:
+    """204이고 본문이 없으며, 로그인 상태의 쿠키를 지우는 Set-Cookie가 하나 있다."""
+    assert response.status_code == 204, response.text
+    assert response.content == b""
+    [cookie] = set_cookies(response, cookie_name)
+    assert cookie.value == ""
+    assert sorted(cookie.attributes) == deleted_session_cookie_attributes(secure=secure)
+
+
+def far_future() -> datetime:
+    return datetime.now(UTC) + timedelta(days=1)
+
+
+@pytest.mark.parametrize(
+    "session_cookie",
+    [
+        pytest.param(None, id="no-cookie"),
+        pytest.param(UNKNOWN_SESSION_TOKEN, id="unknown-cookie"),
+    ],
+)
+def test_logout_without_valid_login_returns_204_and_deletes_cookie(
+    client: TestClient, store: FakeAuthStore, session_cookie: str | None
+) -> None:
+    """TC-1.3.12. 로그아웃은 관문을 거치지 않으므로 로그인 상태를 조회하지 않는다."""
+    response = logout(client, session_cookie=session_cookie)
+
+    assert_logged_out(response)
+    assert store.lookups == []
+    if session_cookie is None:
+        assert store.writes == []
+    else:
+        assert store.writes == [
+            StoreWrite("delete_login_session", {"token_hash": security.hash_token(session_cookie)})
+        ]
+
+
+def test_logout_deletes_only_the_attached_login_session(
+    client: TestClient, store: FakeAuthStore
+) -> None:
+    """요청에 붙은 쿠키의 행 하나만 지운다. 같은 사람의 다른 기기 행은 그대로 둔다."""
+    user = store.put_user("reader@example.com", READER_IDENTITY.sub)
+    store.put_login_session(security.hash_token(OLD_SESSION_TOKEN), user.id, far_future())
+    store.put_login_session(security.hash_token(OTHER_DEVICE_TOKEN), user.id, far_future())
+
+    response = logout(client, session_cookie=OLD_SESSION_TOKEN)
+
+    assert_logged_out(response)
+    assert set(store.login_sessions) == {security.hash_token(OTHER_DEVICE_TOKEN)}
+
+
+def test_logout_of_person_removed_from_allowlist_returns_204(
+    client: TestClient, store: FakeAuthStore
+) -> None:
+    """허용 목록에서 빠진 사람도 로그아웃할 수 있다(API.md 4.2절, ADR-025)."""
+    user = store.put_user("stranger@example.com", "sub-stranger")
+    store.put_login_session(security.hash_token(OLD_SESSION_TOKEN), user.id, far_future())
+
+    response = logout(client, session_cookie=OLD_SESSION_TOKEN)
+
+    assert_logged_out(response)
+    assert store.login_sessions == {}
+
+
+def test_logout_cookie_name_and_secure_follow_settings(
+    monkeypatch: pytest.MonkeyPatch, store: FakeAuthStore, provider: FakeIdentityProvider
+) -> None:
+    """읽고 지우는 쿠키의 이름은 LOGIN_COOKIE_NAME을, Secure는 FRONTEND_URL의 스킴을 따른다."""
+    frontend_url = "https://diegesis.example"
+    monkeypatch.setenv("LOGIN_COOKIE_NAME", "custom_login_cookie")
+    monkeypatch.setenv("FRONTEND_URL", frontend_url)
+    get_settings.cache_clear()
+
+    with TestClient(make_app(store, provider), follow_redirects=False) as client:
+        response = logout(
+            client,
+            session_cookie=UNKNOWN_SESSION_TOKEN,
+            session_cookie_name="custom_login_cookie",
+            origin=frontend_url,
+        )
+
+    assert_logged_out(response, secure=True, cookie_name="custom_login_cookie")
+    assert set_cookies(response, SESSION_COOKIE) == []
+    assert store.writes == [
+        StoreWrite(
+            "delete_login_session", {"token_hash": security.hash_token(UNKNOWN_SESSION_TOKEN)}
+        )
+    ]
+
+
+def test_logout_is_not_served_by_get(client: TestClient, store: FakeAuthStore) -> None:
+    """상태를 바꾸는 경로는 GET으로 받지 않는다(ADR-027). GET은 출처 확인을 거치지 않는다."""
+    client.cookies.clear()
+    response = client.get(LOGOUT_PATH, headers={"Cookie": f"{SESSION_COOKIE}={OLD_SESSION_TOKEN}"})
+
+    assert response.status_code == 405
+    assert response.json()["code"] == "METHOD_NOT_ALLOWED"
+    assert set_cookies(response, SESSION_COOKIE) == []
+    assert store.writes == []
+
+
+# --- 내 정보 ------------------------------------------------------------------
+
+
+def test_me_returns_the_user_and_role_from_allowlist(
+    client: TestClient, store: FakeAuthStore
+) -> None:
+    """관문이 돌려준 사용자를 그대로 응답한다. 역할은 허용 목록의 값이고, 이름이 없으면 null이다."""
+    store.allow("admin@example.com", "admin")
+    user = store.put_user("admin@example.com", "sub-admin", display_name=None)
+    store.put_login_session(security.hash_token(OLD_SESSION_TOKEN), user.id, far_future())
+
+    client.cookies.clear()
+    response = client.get(ME_PATH, headers={"Cookie": f"{SESSION_COOKIE}={OLD_SESSION_TOKEN}"})
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "id": str(user.id),
+        "email": "admin@example.com",
+        "display_name": None,
+        "role": "admin",
+    }
+    assert store.writes == []
+
+
+# --- TC-1.5.3: OpenAPI 문서 -----------------------------------------------------
+
+
+def test_openapi_lists_this_epics_routes_and_no_allowlist_api(client: TestClient) -> None:
+    """TC-1.5.3. 허용 목록은 SQL로만 다루므로 그것을 조회하거나 바꾸는 경로가 없다(ADR-024)."""
+    document = client.get("/api/openapi.json").json()
+    paths = document["paths"]
+
+    assert {LOGIN_PATH, CALLBACK_PATH, LOGOUT_PATH, ME_PATH} <= set(paths)
+    assert set(paths[LOGOUT_PATH]) == {"post"}
+    assert set(paths[ME_PATH]) == {"get"}
+    assert [path for path in paths if path.startswith("/api/admin/allowed-emails")] == []
+    # 프론트엔드는 이 문서로 타입을 만든다(docs/DEVELOPMENT.md 6.4절). 내 정보의 네 필드가 있다.
+    me_schema = document["components"]["schemas"]["MeResponse"]
+    assert set(me_schema["properties"]) == {"id", "email", "display_name", "role"}
+    assert me_schema["properties"]["role"]["enum"] == ["user", "admin"]
 
 
 # --- 의존 방향 --------------------------------------------------------------
