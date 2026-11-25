@@ -8,9 +8,10 @@ docs/ARCHITECTURE.md 6절에, 결정의 이유는 ADR-024, ADR-025, ADR-027에 �
   IdentityProvider 포트를 거친다(docs/ARCHITECTURE.md 8절).
 - 결과는 성공, NOT_ALLOWED, LOGIN_FAILED의 셋뿐이다. 실패의 원인은 공격자에게 단서가 되므로 결과에
   담지 않고 로그에만 남긴다(ADR-025).
-- 실패하거나 허용 목록 밖이면 저장소의 쓰기 메서드를 하나도 부르지 않는다. 성공했을 때의 쓰기는
-  요청 하나의 트랜잭션(get_db_session) 안에서 일어나므로, service가 커밋하거나 트랜잭션을 열지
-  않는다.
+- 실패하거나 허용 목록 밖이면 users와 login_sessions를 바꾸지 않는다. 쌍을 확인한 뒤 등록하려다
+  겹친 요청이 먼저 만든 행과 부딪힌 경우 말고는 저장소의 쓰기 메서드를 부르지도 않는다. 성공했을
+  때의 쓰기는 요청 하나의 트랜잭션(get_db_session) 안에서 일어나므로, service가 커밋하거나
+  트랜잭션을 열지 않는다.
 - 로그에는 쿠키 값, code, 토큰, 클라이언트 비밀값, state, nonce, code_verifier를 남기지 않는다(E1
   "못 박을 것"). LoginFailedError의 메시지는 어댑터가 원인만 적으므로 남긴다.
 - 역할은 결과에 담지 않는다. 관문이 요청마다 허용 목록에서 읽는다(ADR-024).
@@ -47,7 +48,9 @@ class AuthStore(Protocol):
 
     async def create_user(
         self, *, email: str, google_sub: str, display_name: str | None
-    ) -> UserRecord: ...
+    ) -> UserRecord | None:
+        """같은 이메일이나 같은 google_sub의 행이 이미 있으면 만들지 않고 None을 돌려준다."""
+        ...
 
     async def update_display_name(self, user_id: UUID, display_name: str | None) -> None: ...
 
@@ -80,6 +83,10 @@ LoginResult = LoginSucceeded | LoginRejected
 
 _LOGIN_FAILED = LoginRejected(error="LOGIN_FAILED")
 _NOT_ALLOWED = LoginRejected(error="NOT_ALLOWED")
+
+
+class _PairMismatchError(Exception):
+    """이메일만 같거나 google_sub만 같은 사용자가 있다. 원인은 이미 로그에 남겼다."""
 
 
 class AuthService:
@@ -129,34 +136,27 @@ class AuthService:
             logger.warning("로그인 거부: 이메일이 허용 목록에 없음")
             return _NOT_ALLOWED
 
-        users = await self._store.find_users_by_email_or_sub(email=email, google_sub=identity.sub)
-        # 이메일만 같거나 google_sub만 같은 행이 있으면 거부하고, 그 행을 고치거나 새 행을 만들지
-        # 않는다(ADR-027). 이 확인이 google_sub의 고유 제약 위반도 미리 막는다.
-        conflicts = [
-            user for user in users if user.email != email or user.google_sub != identity.sub
-        ]
-        if conflicts:
-            for user in conflicts:
-                if user.email == email:
-                    logger.warning(
-                        "로그인 거부: 이메일은 같고 google_sub가 다른 사용자가 있음 (user_id=%s)",
-                        user.id,
-                    )
-                else:
-                    logger.warning(
-                        "로그인 거부: google_sub는 같고 이메일이 다른 사용자가 있음 (user_id=%s)",
-                        user.id,
-                    )
+        try:
+            user = await self._paired_user(email=email, google_sub=identity.sub)
+            # 여기서부터의 쓰기는 요청 하나의 트랜잭션이다.
+            if user is not None:
+                await self._store.update_display_name(user.id, identity.name)
+            else:
+                user = await self._store.create_user(
+                    email=email, google_sub=identity.sub, display_name=identity.name
+                )
+                if user is None:
+                    # 같은 사람의 결과 처리 두 개가 겹치면, 위에서 쌍을 확인한 뒤 등록하기 전에 다른
+                    # 요청이 행을 먼저 만든다. 그 행으로 쌍을 다시 확인한다. 고유 제약 위반으로
+                    # 500을 내지 않는다(E1 S1.3).
+                    logger.info("로그인: 겹친 요청이 사용자를 먼저 등록해 쌍을 다시 확인함")
+                    user = await self._paired_user(email=email, google_sub=identity.sub)
+                    if user is None:
+                        logger.warning("로그인 실패: 등록하지 못했고 쌍이 맞는 사용자도 없음")
+                        return _LOGIN_FAILED
+        except _PairMismatchError:
             return _LOGIN_FAILED
 
-        # 여기서부터의 쓰기는 요청 하나의 트랜잭션이다.
-        if users:
-            [user] = users
-            await self._store.update_display_name(user.id, identity.name)
-        else:
-            user = await self._store.create_user(
-                email=email, google_sub=identity.sub, display_name=identity.name
-            )
         if current_session_token:
             # 요청에 붙어 온 쿠키의 행 하나만 지운다. 같은 사람의 다른 기기 행은 그대로 둔다.
             await self._store.delete_login_session(security.hash_token(current_session_token))
@@ -177,6 +177,31 @@ class AuthService:
         """
         if session_token:
             await self._store.delete_login_session(security.hash_token(session_token))
+
+    async def _paired_user(self, *, email: str, google_sub: str) -> UserRecord | None:
+        """이메일과 google_sub가 모두 같은 사용자. 없으면 None이다.
+
+        이메일만 같거나 google_sub만 같은 행이 있으면 거부의 원인을 로그에 남기고
+        _PairMismatchError를 낸다. 그 행을 고치거나 새 행을 만들지 않는다(ADR-027). 이 확인이
+        google_sub의 고유 제약 위반도 미리 막는다.
+        """
+        users = await self._store.find_users_by_email_or_sub(email=email, google_sub=google_sub)
+        conflicts = [user for user in users if user.email != email or user.google_sub != google_sub]
+        for user in conflicts:
+            if user.email == email:
+                logger.warning(
+                    "로그인 거부: 이메일은 같고 google_sub가 다른 사용자가 있음 (user_id=%s)",
+                    user.id,
+                )
+            else:
+                logger.warning(
+                    "로그인 거부: google_sub는 같고 이메일이 다른 사용자가 있음 (user_id=%s)",
+                    user.id,
+                )
+        if conflicts:
+            raise _PairMismatchError
+        # 남은 행은 이메일과 google_sub가 모두 같다. 두 컬럼이 고유하므로 많아야 하나다.
+        return users[0] if users else None
 
     async def _verified_identity(
         self, *, state_cookie: str | None, state: str | None, code: str | None, error: str | None

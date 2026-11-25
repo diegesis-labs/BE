@@ -106,7 +106,9 @@ class FakeAuthStore:
       "저장소에 쓰지 않았다"를 writes == []로 확인한다.
     - 데이터베이스의 제약 가운데 로그인에 걸린 것을 흉내 내서, 어기면 FakeConstraintError를 낸다.
       이메일은 소문자만, users.email과 users.google_sub는 고유, login_sessions.token_hash는 고유,
-      login_sessions.user_id는 있는 사용자(docs/ARCHITECTURE.md 6절).
+      login_sessions.user_id는 있는 사용자(docs/ARCHITECTURE.md 6절). 다만 create_user는
+      AuthRepository와 같이, 같은 이메일이나 같은 google_sub의 행이 있으면 만들지 않고 None을
+      돌려준다(INSERT … ON CONFLICT DO NOTHING).
     - 이메일은 받은 그대로 비교한다. 소문자로 바꾸는 것은 service의 일이다(AuthRepository와 같다).
     - "지금"은 이 컴퓨터의 시각이다. 만료 시각이 지금과 같거나 그보다 이르면 만료된 것이다.
     - find_active_login은 읽기이므로 writes에 남기지 않고, 받은 해시를 lookups에 남긴다. 쿠키가
@@ -170,10 +172,14 @@ class FakeAuthStore:
 
     async def create_user(
         self, *, email: str, google_sub: str, display_name: str | None
-    ) -> UserRecord:
+    ) -> UserRecord | None:
         self._record("create_user", email=email, google_sub=google_sub, display_name=display_name)
         if self.before_create_user is not None:
             self.before_create_user()
+        if any(
+            user.email == email or user.google_sub == google_sub for user in self.users.values()
+        ):
+            return None
         return self._insert_user(email=email, google_sub=google_sub, display_name=display_name)
 
     async def update_display_name(self, user_id: UUID, display_name: str | None) -> None:

@@ -19,6 +19,7 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import ColumnElement, RowMapping, delete, func, insert, or_, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.models import AllowedEmailModel, LoginSessionModel, UserModel
@@ -85,15 +86,22 @@ class AuthRepository:
 
     async def create_user(
         self, *, email: str, google_sub: str, display_name: str | None
-    ) -> UserRecord:
+    ) -> UserRecord | None:
+        """사용자를 만든다. 같은 이메일이나 같은 google_sub의 행이 이미 있으면 만들지 않고 None이다.
+
+        service가 쌍을 확인한 뒤 이 메서드를 부르기 전에, 같은 사람의 겹친 결과 처리가 행을 먼저
+        만들 수 있다. 그때 고유 제약 위반으로 트랜잭션을 깨뜨리지 않고 None을 돌려준다(E1 S1.3).
+        다른 트랜잭션이 아직 커밋하지 않은 행과 부딪히면 그 트랜잭션이 끝날 때까지 기다린다.
+        """
         row = (
             await self._session.execute(
-                insert(UserModel)
+                pg_insert(UserModel)
                 .values(email=email, google_sub=google_sub, display_name=display_name)
+                .on_conflict_do_nothing()
                 .returning(*_USER_COLUMNS)
             )
-        ).one()
-        return _user_record(row._mapping)
+        ).one_or_none()
+        return None if row is None else _user_record(row._mapping)
 
     async def update_display_name(self, user_id: UUID, display_name: str | None) -> None:
         await self._session.execute(

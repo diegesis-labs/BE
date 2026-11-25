@@ -277,6 +277,9 @@ async def test_create_user_inserts_a_row_and_returns_it(
         )
         await session.commit()
 
+    # 부딪히는 행이 없으면 만든 행을 돌려준다.
+    assert named is not None
+    assert unnamed is not None
     assert named.email == "reader@example.com"
     assert named.google_sub == "sub-reader"
     assert named.display_name == "읽는 사람"
@@ -464,6 +467,7 @@ async def test_repository_does_not_commit_on_its_own(
         newcomer = await repository.create_user(
             email="newcomer@example.com", google_sub="sub-newcomer", display_name=None
         )
+        assert newcomer is not None
         await repository.add_login_session(
             token_hash="newcomer-hash",
             user_id=newcomer.id,

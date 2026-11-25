@@ -10,8 +10,10 @@ service에 넘기고, 그 결과를 리디렉션 주소와 쿠키로 바꾼다. 
   받는 매개변수(next, redirect 등)도 받지 않는다. 언제나 첫 화면으로 돌아간다(ADR-025).
 - 실패의 원인은 Location에 담지 않는다. error의 값은 NOT_ALLOWED와 LOGIN_FAILED뿐이다(ADR-025).
   원인은 service가 로그에만 남긴다.
-- 결과 처리는 리디렉션으로만 끝난다. 그래서 쿼리는 모두 선택으로 받는다. 필수로 받으면 빠졌을 때
-  FastAPI가 400 VALIDATION_ERROR를 낸다.
+- 결과 처리는 리디렉션으로만 끝난다. 그래서 쿼리를 경로 함수의 매개변수로 받지 않고
+  request.query_params에서 읽는다. 매개변수로 받으면 필수일 때에는 빠졌을 때 FastAPI가 400
+  VALIDATION_ERROR를 내고, 선택일 때에도 일어날 수 없는 400이 OpenAPI 문서에 실린다. 쿼리 세 개는
+  문서에 선택인 매개변수로 직접 적는다.
 - 두 경로는 GET이지만 상태를 바꾼다. 출처 확인(app/core/origin.py)은 GET을 보지 않으므로 이 둘은
   state, nonce, PKCE로 지킨다. 이 두 경로 말고는 상태를 바꾸는 GET 경로를 만들지 않는다(ADR-027).
 - 임의의 값을 만들지 않는다. service가 security.new_token()으로 만든다(ADR-027).
@@ -120,24 +122,33 @@ async def start_google_login(service: AuthServiceDependency) -> Response:
     return response
 
 
-@router.get("/auth/google/callback", status_code=302, response_class=RedirectResponse)
-async def finish_google_login(
-    request: Request,
-    service: AuthServiceDependency,
-    code: str | None = None,
-    state: str | None = None,
-    error: str | None = None,
-) -> Response:
+# 결과 처리가 읽는 쿼리. Google이 붙이며, 어느 것이 빠져도 LOGIN_FAILED로 리디렉션한다.
+CALLBACK_QUERY_NAMES = ("code", "state", "error")
+
+
+def _optional_query_parameter(name: str) -> dict[str, object]:
+    """OpenAPI 문서에 적는 선택인 쿼리 매개변수 하나."""
+    return {"name": name, "in": "query", "required": False, "schema": {"type": "string"}}
+
+
+@router.get(
+    "/auth/google/callback",
+    status_code=302,
+    response_class=RedirectResponse,
+    openapi_extra={"parameters": [_optional_query_parameter(n) for n in CALLBACK_QUERY_NAMES]},
+)
+async def finish_google_login(request: Request, service: AuthServiceDependency) -> Response:
     """Google이 돌려준 로그인 결과를 확인하고, 브라우저를 프론트엔드의 주소로 보낸다.
 
     로그인에 성공했을 때에만 로그인 상태의 쿠키를 심는다. 어느 경우든 diegesis_oauth_state를 지운다.
     """
     settings = get_settings()
+    query = request.query_params
     result = await service.complete_login(
         state_cookie=request.cookies.get(OAUTH_STATE_COOKIE),
-        state=state,
-        code=code,
-        error=error,
+        state=query.get("state"),
+        code=query.get("code"),
+        error=query.get("error"),
         current_session_token=request.cookies.get(settings.login_cookie_name),
     )
     if isinstance(result, LoginSucceeded):
