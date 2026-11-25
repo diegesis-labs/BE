@@ -658,6 +658,18 @@ class PrecheckProblem:
     fix_sql: str  # 그것을 맞추는 SQL. README의 SQL과 같은 꼴(이메일을 lower()로 감쌈)
 
 
+# 데이터베이스를 읽다가 날 수 있는 예외. 닿지 못함(OSError), 서버가 거부함(PostgresError), 그리고
+# asyncpg가 서버와 말을 맞추지 못함(InterfaceError, InternalClientError)이다. 마지막 경우의 예는
+# DB_PORT의 서버가 asyncpg가 지원하지 않는 인증이나 프로토콜을 쓸 때다. 뒤의 둘은 앞의 둘의 하위
+# 클래스가 아니다(2차 리뷰 COR-1).
+DATABASE_ERRORS: tuple[type[Exception], ...] = (
+    OSError,
+    asyncpg.PostgresError,
+    asyncpg.InterfaceError,
+    asyncpg.exceptions.InternalClientError,
+)
+
+
 async def connect_read_only(database_url: str) -> asyncpg.Connection:
     """모든 트랜잭션이 읽기 전용인 연결. 이 연결로는 어떤 행도 바꿀 수 없다.
 
@@ -1285,7 +1297,7 @@ async def preflight(settings: CheckSettings, args: Args) -> list[PreflightProble
             allowed_email=args.allowed_email,
             denied_email=args.denied_email,
         )
-    except (OSError, asyncpg.PostgresError) as error:
+    except DATABASE_ERRORS as error:
         problems.append(
             PreflightProblem(
                 problem=(
@@ -1516,7 +1528,7 @@ async def run_checks(settings: CheckSettings, args: Args) -> list[str]:
         raise CheckAbortedError(
             f"브라우저가 닫혔거나 Playwright가 실패했다: {type(error).__name__}"
         ) from None
-    except (OSError, asyncpg.PostgresError) as error:
+    except DATABASE_ERRORS as error:
         raise CheckAbortedError(
             f"점검 중에 개발용 데이터베이스를 읽지 못했다: {type(error).__name__}"
         ) from None

@@ -29,8 +29,14 @@ def create_engine(url: str | None = None) -> AsyncEngine:
     """비동기 엔진을 만든다. 주소를 주지 않으면 설정 클래스의 database_url을 쓴다.
 
     통합 테스트는 컨테이너의 주소를 직접 넘긴다. 개발자의 `.env`에 든 주소에 접속하지 않기 위해서다.
+
+    문장이 실패했을 때의 예외에 바인딩 값을 담지 않는다(hide_parameters). 그 예외는 서버 로그에
+    추적과 함께 남는데, 바인딩 값에는 허용 목록 밖의 이메일과 token_hash가 들어 있기 때문이다
+    (2차 리뷰 SEC-1).
     """
-    return create_async_engine(url if url is not None else get_settings().database_url)
+    return create_async_engine(
+        url if url is not None else get_settings().database_url, hide_parameters=True
+    )
 
 
 def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
