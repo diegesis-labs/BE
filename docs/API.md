@@ -5,7 +5,7 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
 
 # API
 
-이 문서는 프론트엔드와 백엔드가 주고받는 요청과 응답의 약속을 정의합니다. 왜 이런 방식을 골랐는지는 [ADR-005](ADR.md#adr-005-프론트엔드와의-api-연동-방식)와 [ADR-006](ADR.md#adr-006-로그인과-접근-제한)에, 요청들이 어떤 순서로 오가는지는 [ARCHITECTURE.md](ARCHITECTURE.md#3-책을-읽는-동안의-흐름)에, 낯선 용어의 뜻은 [GLOSSARY.md](GLOSSARY.md)에 있습니다.
+이 문서는 프론트엔드와 백엔드가 주고받는 요청과 응답의 약속을 정의합니다. 왜 이런 방식을 골랐는지는 [ADR-005](ADR.md#adr-005-프론트엔드와의-api-연동-방식)와 [ADR-006](ADR.md#adr-006-로그인과-접근-제한)에, 로그인과 허용 목록의 세부는 [ADR-024](ADR.md#adr-024-허용-목록의-관리와-확인)와 [ADR-025](ADR.md#adr-025-google-로그인-흐름의-세부)에, 요청들이 어떤 순서로 오가는지는 [ARCHITECTURE.md](ARCHITECTURE.md#3-책을-읽는-동안의-흐름)에, 낯선 용어의 뜻은 [GLOSSARY.md](GLOSSARY.md)에 있습니다.
 
 이 문서의 엔드포인트는 구현 전에 작성한 초안입니다. 서버가 구현된 뒤에는 서버가 자동으로 만들어 내는 OpenAPI 문서(`/api/openapi.json`)가 세부 형식의 기준이 되며, 이 문서는 전체 흐름과 규칙을 설명하는 역할을 맡습니다.
 
@@ -32,9 +32,50 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
 
 ### 2.2 로그인 상태
 
-로그인에 성공하면 백엔드가 쿠키를 심고, 그 뒤의 모든 요청은 쿠키로 사용자를 식별합니다. 그래서 프론트엔드는 토큰을 저장하거나 요청 헤더에 붙일 필요가 없습니다. 다만 로그인하지 않은 상태로 보호된 경로를 호출하면 `401` 응답을 받으므로, 프론트엔드는 이 응답을 받았을 때 로그인 화면으로 보내면 됩니다.
+로그인에 성공하면 백엔드가 쿠키를 심고, 그 뒤의 모든 요청은 쿠키로 사용자를 식별합니다. 그래서 프론트엔드는 토큰을 저장하거나 요청 헤더에 붙일 필요가 없습니다.
 
 쿠키 방식이 안정적으로 동작하려면 배포 환경에서 프론트엔드와 백엔드가 같은 도메인 아래에 있어야 합니다. 이 조건에 대한 설명은 [INFRA.md](INFRA.md)에 있습니다.
+
+3절의 표에서 권한이 "로그인한 사용자"나 "관리자"인 경로를 보호된 경로라고 부릅니다. 보호된 경로의 요청은 매번 아래 순서로 관문을 거칩니다. 백엔드는 허용 목록을 기억해 두지 않고 요청마다 데이터베이스에서 확인하므로, 허용 목록에서 빠진 사람은 이미 로그인한 상태여도 다음 요청부터 막힙니다([ADR-024](ADR.md#adr-024-허용-목록의-관리와-확인)).
+
+```mermaid
+sequenceDiagram
+  participant FE as 프론트엔드
+  participant BE as 백엔드 (관문)
+  participant DB as PostgreSQL
+  actor OP as 운영자 (백엔드 담당자)
+
+  FE->>BE: 보호된 경로를 요청 (Cookie: diegesis_session)
+  alt 쿠키가 없음
+    BE-->>FE: 401 NOT_AUTHENTICATED
+  else 쿠키가 있음
+    BE->>DB: 쿠키 값의 해시로 만료되지 않은 로그인 상태를 조회
+    alt 로그인 상태가 없거나 만료됨
+      BE-->>FE: 401 NOT_AUTHENTICATED
+    else 로그인 상태가 있음
+      BE->>DB: 그 사용자의 이메일로 허용 목록을 조회
+      alt 허용 목록에 없음
+        BE-->>FE: 403 NOT_ALLOWED
+      else 관리자 경로인데 역할이 user
+        BE-->>FE: 403 ADMIN_ONLY
+      else 통과
+        BE-->>FE: 그 경로의 응답
+      end
+    end
+  end
+  OP->>DB: SQL로 허용 목록이나 역할을 바꿈
+  Note over BE,DB: 서버를 다시 띄우지 않아도 다음 요청부터 바뀐 목록이 적용됩니다.
+```
+
+관문이 거절할 때의 응답과 프론트엔드가 할 일은 다음과 같습니다. 응답의 본문은 2.3절의 형식을 따릅니다.
+
+| 응답 | 언제 받는가 | 프론트엔드가 할 일 |
+| --- | --- | --- |
+| `401 NOT_AUTHENTICATED` | 쿠키가 없거나, 백엔드가 모르는 값이거나, 로그인 상태가 만료됐을 때 | 로그인 화면(`/login`)으로 보냅니다. |
+| `403 NOT_ALLOWED` | 로그인 상태는 있지만 그 이메일이 허용 목록에 없을 때. 로그인한 뒤에 허용 목록에서 빠진 경우입니다. | 허용 목록 밖 안내 화면(`/login?error=NOT_ALLOWED`)으로 보냅니다. |
+| `403 ADMIN_ONLY` | 역할이 `user`인 사람이 관리자 경로를 호출했을 때 | 관리자 화면을 보여 주지 않습니다. 역할은 `GET /api/me`(4.3절)로 미리 알 수 있습니다. |
+
+허용 목록은 관리 API 없이 데이터베이스에 SQL로 넣고 빼며, 그 SQL은 [README](../README.md#허용-목록에-사람-넣고-빼기)에 있습니다.
 
 ### 2.3 에러 응답
 
@@ -69,9 +110,9 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
 | HTTP 상태 | `code` | 언제 발생하는가 |
 | --- | --- | --- |
 | 400 | `VALIDATION_ERROR` | 요청의 형식이나 값이 잘못됐을 때 |
-| 401 | `NOT_AUTHENTICATED` | 로그인하지 않았거나 로그인 상태가 만료됐을 때 |
-| 403 | `NOT_ALLOWED` | 허용 목록에 없는 계정일 때 |
-| 403 | `ADMIN_ONLY` | 관리자만 쓸 수 있는 경로를 일반 사용자가 호출했을 때 |
+| 401 | `NOT_AUTHENTICATED` | 로그인하지 않았거나 로그인 상태가 만료됐을 때 (2.2절) |
+| 403 | `NOT_ALLOWED` | 허용 목록에 없는 계정일 때 (2.2절) |
+| 403 | `ADMIN_ONLY` | 관리자만 쓸 수 있는 경로를 일반 사용자가 호출했을 때 (2.2절) |
 | 404 | `NOT_FOUND` | 요청한 책, 챕터, 선곡 기록 등이 없을 때 |
 | 405 | `METHOD_NOT_ALLOWED` | 경로는 있지만 그 메서드로는 호출할 수 없을 때 |
 | 422 | `BUNDLE_INVALID` | 올린 산출물 묶음이 규격에 어긋날 때 (4.9절) |
@@ -86,7 +127,7 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
 | [`GET /api/health`](#41-헬스체크) | 서버가 살아 있는지 확인합니다. | 누구나 |
 | [`GET /api/auth/google/login`](#42-로그인과-로그아웃) | Google 로그인 화면으로 이동시킵니다. | 누구나 |
 | [`GET /api/auth/google/callback`](#42-로그인과-로그아웃) | Google이 로그인 결과를 돌려주는 주소입니다. | Google만 호출 |
-| [`POST /api/auth/logout`](#42-로그인과-로그아웃) | 로그아웃합니다. | 로그인한 사용자 |
+| [`POST /api/auth/logout`](#42-로그인과-로그아웃) | 로그아웃합니다. | 누구나 |
 | [`GET /api/me`](#43-내-정보) | 내 정보를 조회합니다. | 로그인한 사용자 |
 | [`GET /api/me/settings`](#44-선곡-설정) | 내 선곡 설정(임베딩 모델)과 고를 수 있는 모델의 목록을 조회합니다. | 로그인한 사용자 |
 | [`PUT /api/me/settings`](#44-선곡-설정) | 내 선곡 설정(임베딩 모델)을 바꿉니다. | 로그인한 사용자 |
@@ -96,17 +137,14 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
 | [`POST /api/books/{book_id}/position`](#47-위치-알림) | 화면에 보이는 문장의 범위를 알리고, 곡을 어떻게 할지 응답받습니다. | 로그인한 사용자 |
 | [`POST /api/recommendations/{id}/events`](#48-반응-기록) | 재생, 좋아요, 싫어요 같은 반응을 기록합니다. | 로그인한 사용자 |
 | [`POST /api/admin/bundles`](#49-관리자-산출물-묶음-적재) | 산출물 묶음을 올립니다. | 관리자 |
-| [`GET /api/admin/allowed-emails`](#410-관리자-허용-목록) | 허용 목록을 조회합니다. | 관리자 |
-| [`POST /api/admin/allowed-emails`](#410-관리자-허용-목록) | 허용 목록에 한 사람을 추가합니다. | 관리자 |
-| [`DELETE /api/admin/allowed-emails/{email}`](#410-관리자-허용-목록) | 허용 목록에서 한 사람을 뺍니다. | 관리자 |
-| [`GET /api/admin/exports/recommendations`](#411-관리자-평가-자료-내보내기) | 선곡 기록을 CSV로 내려받습니다. | 관리자 |
-| [`GET /api/admin/exports/playback-events`](#411-관리자-평가-자료-내보내기) | 반응 기록을 CSV로 내려받습니다. | 관리자 |
+| [`GET /api/admin/exports/recommendations`](#410-관리자-평가-자료-내보내기) | 선곡 기록을 CSV로 내려받습니다. | 관리자 |
+| [`GET /api/admin/exports/playback-events`](#410-관리자-평가-자료-내보내기) | 반응 기록을 CSV로 내려받습니다. | 관리자 |
 
-권한이 "관리자"인 경로는 프론트엔드의 관리자 화면이 호출합니다. 관리자 화면도 다른 화면과 같은 쿠키로 로그인 상태를 보내며, 백엔드는 `role`이 `admin`인 사람의 요청만 처리합니다.
+권한이 "관리자"인 경로는 프론트엔드의 관리자 화면이 호출합니다. 관리자 화면도 다른 화면과 같은 쿠키로 로그인 상태를 보내며, 백엔드는 허용 목록에서 역할이 `admin`인 사람의 요청만 처리합니다. 허용 목록을 조회하거나 바꾸는 API는 없습니다([ADR-024](ADR.md#adr-024-허용-목록의-관리와-확인)).
 
 ## 4. 엔드포인트별 형식과 예시
 
-이 절은 모든 엔드포인트를 같은 틀로 적습니다. 엔드포인트 하나가 가장 바깥의 항목이고, 그 아래에 **Request Header**, **Request Body**, **Response Body**를 들여 써서 차례로 적습니다. 응답에 눈여겨볼 헤더가 있는 엔드포인트에는 **Response Header**를, 덧붙일 설명이 있는 엔드포인트에는 **설명**을 추가로 적습니다.
+이 절은 모든 엔드포인트를 같은 틀로 적습니다. 엔드포인트 하나가 가장 바깥의 항목이고, 그 아래에 **Request Header**, **Request Body**, **Response Body**를 들여 써서 차례로 적습니다. 응답에 눈여겨볼 헤더가 있는 엔드포인트에는 **Response Header**를, 덧붙일 설명이 있는 엔드포인트에는 **설명**을 추가로 적습니다. 그리고 백엔드가 요청을 받아서 응답하기까지의 순서를 시퀀스 다이어그램으로 그린 **동작 순서**를 적습니다. 동작 순서는 그 엔드포인트를 만드는 Epic의 계약을 정할 때 더합니다. 동작 순서는 이 문서에만 그리며, Epic 문서는 이 그림을 가리키기만 합니다([DECISIONS.md](DECISIONS.md)의 D-56).
 
 예시를 읽을 때에는 다음 세 가지를 알아 두면 됩니다.
 
@@ -129,48 +167,114 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
 
 로그인은 화면 이동으로 이루어지며, 프론트엔드가 JSON을 주고받지 않습니다. 순서는 다음과 같습니다.
 
-1. 프론트엔드가 브라우저를 `GET /api/auth/google/login`으로 이동시킵니다.
-2. 백엔드가 브라우저를 Google 로그인 화면으로 보냅니다.
-3. 사용자가 로그인하면 Google이 브라우저를 `GET /api/auth/google/callback`으로 돌려보냅니다.
-4. 백엔드는 그 계정의 이메일이 허용 목록에 있는지 확인합니다.
-   - 목록에 있다면 로그인 상태를 만들고 쿠키를 심은 다음, 브라우저를 프론트엔드의 첫 화면으로 보냅니다.
-   - 목록에 없다면 쿠키를 심지 않고, 브라우저를 프론트엔드의 `/login?error=NOT_ALLOWED`로 보냅니다.
+1. 프론트엔드가 브라우저를 `/api/auth/google/login`으로 이동시킵니다.
+2. 백엔드가 브라우저를 Google 로그인 화면으로 보냅니다. 이때 Google에 요청하는 정보는 이름, 이메일, 프로필(`openid`, `email`, `profile`)뿐입니다.
+3. 사용자가 로그인하면 Google이 브라우저를 `{FRONTEND_URL}/api/auth/google/callback`으로 돌려보냅니다. 이 주소는 프론트엔드의 주소이며, 프론트엔드의 개발 서버나 호스팅이 `/api` 요청을 백엔드로 넘겨줍니다. `FRONTEND_URL`은 백엔드의 설정값입니다([CONFIGURATION.md 3.1절](CONFIGURATION.md#31-서버)).
+4. 백엔드는 로그인 결과를 확인하고, 브라우저를 아래 표의 프론트엔드 주소 가운데 하나로 보냅니다. 쿠키는 로그인에 성공했을 때에만 심습니다.
+
+| 프론트엔드의 주소 | 언제 보내지는가 | 프론트엔드가 보여 줄 것 |
+| --- | --- | --- |
+| `/` | 허용 목록에 있는 계정으로 로그인했을 때 | 첫 화면 |
+| `/login?error=NOT_ALLOWED` | Google 로그인은 됐지만 그 이메일이 허용 목록에 없을 때 | 테스트 참가자만 쓸 수 있다는 안내 |
+| `/login?error=LOGIN_FAILED` | 로그인이 끝나지 못했을 때. 사용자가 Google 동의 화면에서 취소했거나, 로그인을 시작한 브라우저와 결과를 받은 브라우저가 다르거나, Google이 이메일을 확인하지 않은 계정이거나, Google과 통신하다 실패한 경우입니다. | 다시 로그인해 달라는 안내 |
+
+로그인 뒤에 돌아가는 곳은 언제나 첫 화면입니다. 실패의 자세한 원인은 주소에 담지 않고 백엔드의 로그에만 남깁니다([ADR-025](ADR.md#adr-025-google-로그인-흐름의-세부)).
 
 각 엔드포인트의 형식은 다음과 같습니다.
 
 - **`GET /api/auth/google/login`**: 브라우저를 Google 로그인 화면으로 이동시킵니다.
   - **Request Header**: 필요한 헤더가 없습니다. 프론트엔드는 이 주소를 `fetch`로 호출하지 않고, 브라우저의 주소를 이 주소로 바꿉니다.
   - **Request Body**: 없습니다.
-  - **Response Header** (`302 Found`)
+  - **Response Header** (`302 Found`): 로그인을 시작한 브라우저를 확인하는 값(`state`)을 쿠키에 담아 두고 Google로 보냅니다.
 
     ```http
-    Location: https://accounts.google.com/o/oauth2/v2/auth?client_id=...&redirect_uri=...&state=...
+    Location: https://accounts.google.com/o/oauth2/v2/auth?client_id=...&redirect_uri=http%3A%2F%2Flocalhost%3A5173%2Fapi%2Fauth%2Fgoogle%2Fcallback&response_type=code&scope=openid%20email%20profile&state=Zx81kQ...
+    Set-Cookie: diegesis_oauth_state=Zx81kQ...; HttpOnly; SameSite=Lax; Path=/api/auth/google; Max-Age=600
     ```
 
   - **Response Body**: 없습니다.
+  - **동작 순서**
+
+    ```mermaid
+    sequenceDiagram
+      actor U as 사용자
+      participant B as 브라우저 (프론트엔드)
+      participant BE as 백엔드
+      participant G as Google
+
+      U->>B: 로그인 버튼을 누른다
+      B->>BE: GET /api/auth/google/login (화면 이동)
+      BE->>BE: 임의의 state 값을 만든다
+      BE-->>B: 302 Location: Google 로그인 화면<br/>Set-Cookie: diegesis_oauth_state
+      B->>G: Google 로그인 화면을 연다
+    ```
 
 - **`GET /api/auth/google/callback`**: Google이 로그인 결과를 돌려주는 주소입니다. 프론트엔드가 직접 호출하지 않습니다.
-  - **Request Header**: 필요한 헤더가 없습니다. 로그인 결과는 Google이 주소 뒤에 붙여 주는 `code`와 `state` 쿼리로 전달됩니다.
+  - **Request Header**: 로그인을 시작할 때 심은 `diegesis_oauth_state` 쿠키를 브라우저가 붙입니다. 로그인 결과는 Google이 주소 뒤에 붙여 주는 `code`와 `state` 쿼리로 전달됩니다.
 
     ```http
     GET /api/auth/google/callback?code=4/0AeaYSH...&state=Zx81kQ...
+    Cookie: diegesis_oauth_state=Zx81kQ...
+    ```
+
+    사용자가 Google 동의 화면에서 취소하면 `code` 대신 `error` 쿼리가 옵니다.
+
+    ```http
+    GET /api/auth/google/callback?error=access_denied&state=Zx81kQ...
     ```
 
   - **Request Body**: 없습니다.
-  - **Response Header** (`302 Found`): 허용 목록에 있는 계정이라면 쿠키를 심고 프론트엔드의 첫 화면으로 보냅니다.
+  - **Response Header** (`302 Found`): 어느 경우든 `diegesis_oauth_state` 쿠키를 지웁니다. 허용 목록에 있는 계정이라면 로그인 상태의 쿠키를 심고 프론트엔드의 첫 화면으로 보냅니다.
 
     ```http
     Location: http://localhost:5173/
-    Set-Cookie: diegesis_session=4mXq8ZpT1vK0; HttpOnly; Secure; SameSite=Lax; Path=/
+    Set-Cookie: diegesis_session=4mXq8ZpT1vK0; HttpOnly; SameSite=Lax; Path=/; Max-Age=1209600
+    Set-Cookie: diegesis_oauth_state=; Max-Age=0; Path=/api/auth/google
     ```
 
-    허용 목록에 없는 계정이라면 쿠키를 심지 않고 아래 주소로 보냅니다.
+    허용 목록에 없는 계정이라면 로그인 상태의 쿠키를 심지 않고 아래 주소로 보냅니다. 로그인이 실패했을 때에는 `error=LOGIN_FAILED`로 보냅니다.
 
     ```http
     Location: http://localhost:5173/login?error=NOT_ALLOWED
+    Set-Cookie: diegesis_oauth_state=; Max-Age=0; Path=/api/auth/google
     ```
 
   - **Response Body**: 없습니다.
+  - **설명**
+    - `Max-Age`는 로그인 상태가 유지되는 시간이며, 설정값 `LOGIN_SESSION_TTL_HOURS`로 정합니다([CONFIGURATION.md 3.3절](CONFIGURATION.md#33-로그인)). 위 예시는 기본값인 14일입니다.
+    - 운영 환경(`APP_ENV`가 `production`)에서는 두 쿠키에 `Secure`가 더 붙습니다. 로컬은 HTTP이므로 붙이지 않습니다.
+  - **동작 순서**
+
+    ```mermaid
+    sequenceDiagram
+      participant B as 브라우저 (프론트엔드)
+      participant BE as 백엔드
+      participant G as Google
+      participant DB as PostgreSQL
+
+      G-->>B: 302 Location: {FRONTEND_URL}/api/auth/google/callback
+      B->>BE: GET /api/auth/google/callback?code&state<br/>(Cookie: diegesis_oauth_state)
+      alt error 쿼리가 있음, 또는 state 쿠키가 없거나 쿼리의 state와 다름
+        BE-->>B: 302 /login?error=LOGIN_FAILED
+      else state가 맞음
+        BE->>G: code를 토큰으로 교환 (클라이언트 비밀값 포함)
+        G-->>BE: ID 토큰 (이메일, email_verified, 이름)
+        alt 교환이나 토큰 확인에 실패, 또는 email_verified가 false
+          BE-->>B: 302 /login?error=LOGIN_FAILED
+        else 이메일이 확인됨
+          BE->>DB: 소문자로 바꾼 이메일로 허용 목록을 조회
+          alt 허용 목록에 없음
+            BE-->>B: 302 /login?error=NOT_ALLOWED (users에 등록하지 않음)
+          else 허용 목록에 있음
+            BE->>DB: users에 등록하거나 이름을 갱신
+            BE->>BE: 임의의 쿠키 값을 만든다
+            BE->>DB: login_sessions에 쿠키 값의 해시와 만료 시각을 저장
+            BE-->>B: 302 / (Set-Cookie: diegesis_session)
+          end
+        end
+      end
+      Note over B,BE: 모든 응답에서 diegesis_oauth_state 쿠키를 지웁니다.
+    ```
 
 - **`POST /api/auth/logout`**: 로그아웃합니다.
   - **Request Header**
@@ -187,6 +291,21 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
     ```
 
   - **Response Body**: 없습니다.
+  - **설명**: 이 경로는 관문(2.2절)을 거치지 않습니다. 쿠키가 없거나 이미 무효인 상태로 호출해도, 허용 목록에서 빠진 사람이 호출해도 `204`를 응답합니다. 그래서 프론트엔드는 로그인 상태를 확인하지 않고 로그아웃을 호출해도 됩니다.
+  - **동작 순서**
+
+    ```mermaid
+    sequenceDiagram
+      participant FE as 프론트엔드
+      participant BE as 백엔드
+      participant DB as PostgreSQL
+
+      FE->>BE: POST /api/auth/logout (Cookie: diegesis_session)
+      opt 쿠키가 있음
+        BE->>DB: 쿠키 값의 해시로 login_sessions의 행을 지움 (없으면 그대로 둠)
+      end
+      BE-->>FE: 204 (diegesis_session 쿠키를 지우는 Set-Cookie)
+    ```
 
 ### 4.3 내 정보
 
@@ -209,7 +328,23 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
     }
     ```
 
-  - **설명**: `role`은 `user` 또는 `admin`입니다.
+  - **설명**
+    - `role`은 `user` 또는 `admin`이며, 허용 목록에 적힌 역할입니다. SQL로 역할을 바꾸면 다음 요청부터 바뀐 값이 나옵니다.
+    - `display_name`은 Google 계정의 이름이며, 로그인할 때마다 갱신합니다.
+    - 프론트엔드는 이 경로로 로그인했는지(`401`이면 로그인 전)와 관리자 화면을 보여 줄지(`role`)를 판단할 수 있습니다.
+  - **동작 순서**
+
+    ```mermaid
+    sequenceDiagram
+      participant FE as 프론트엔드
+      participant BE as 백엔드
+      participant DB as PostgreSQL
+
+      FE->>BE: GET /api/me (Cookie: diegesis_session)
+      Note over BE,DB: 2.2절의 관문을 거칩니다. 통과하지 못하면 401이나 403을 응답합니다.
+      BE->>DB: 로그인 상태의 사용자와 허용 목록의 역할을 조회
+      BE-->>FE: 200 (id, email, display_name, role)
+    ```
 
 ### 4.4 선곡 설정
 
@@ -529,60 +664,7 @@ description: 프론트엔드가 백엔드를 호출할 때 지켜야 하는 공�
 
   - **설명**: 에러의 형식은 2.3절과 같고, `detail`이 `{ "file", "line_no", "reason" }`의 목록입니다. 묶음의 규격과 검증 항목은 [AI_CONTRACT.md](AI_CONTRACT.md)에 정의되어 있습니다. 백엔드는 검증과 적재를 모두 마친 뒤에 응답하므로, 적재의 결과를 따로 조회하는 엔드포인트는 없습니다([ADR-019](ADR.md#adr-019-정확-검색과-동기-적재)). 오류의 `line_no`는 그 파일에서 문제가 있는 줄의 번호이며 1부터 셉니다. Parquet 파일처럼 줄을 가리킬 수 없는 파일의 오류에는 `line_no`가 없습니다.
 
-### 4.10 관리자: 허용 목록
-
-- **`GET /api/admin/allowed-emails`**: 허용 목록을 조회합니다.
-  - **Request Header**
-
-    ```http
-    Cookie: diegesis_session=4mXq8ZpT1vK0
-    ```
-
-  - **Request Body**: 없습니다.
-  - **Response Body** (`200 OK`)
-
-    ```json
-    {
-      "allowed_emails": [
-        { "email": "admin@example.com", "role": "admin" },
-        { "email": "reader@example.com", "role": "user" }
-      ]
-    }
-    ```
-
-- **`POST /api/admin/allowed-emails`**: 허용 목록에 한 사람을 추가합니다.
-  - **Request Header**
-
-    ```http
-    Cookie: diegesis_session=4mXq8ZpT1vK0
-    Content-Type: application/json
-    ```
-
-  - **Request Body**
-
-    ```json
-    { "email": "new-reader@example.com", "role": "user" }
-    ```
-
-  - **Response Body** (`201 Created`)
-
-    ```json
-    { "email": "new-reader@example.com", "role": "user" }
-    ```
-
-- **`DELETE /api/admin/allowed-emails/{email}`**: 허용 목록에서 한 사람을 뺍니다.
-  - **Request Header**: 이메일의 `@`는 주소에 넣을 때 `%40`으로 바꿔서 적습니다.
-
-    ```http
-    DELETE /api/admin/allowed-emails/new-reader%40example.com
-    Cookie: diegesis_session=4mXq8ZpT1vK0
-    ```
-
-  - **Request Body**: 없습니다.
-  - **Response Body**: `204 No Content`이며 본문이 없습니다.
-  - **설명**: 목록에서 뺀 사람의 로그인 상태도 함께 끊습니다.
-
-### 4.11 관리자: 평가 자료 내보내기
+### 4.10 관리자: 평가 자료 내보내기
 
 두 엔드포인트는 모두 CSV 파일을 응답하며, `from`과 `to` 쿼리로 기간을 지정할 수 있습니다. 앱 밖에서 받는 설문과는 사용자의 이메일로 연결하므로, 설문에서도 같은 Google 이메일을 받아야 합니다.
 
