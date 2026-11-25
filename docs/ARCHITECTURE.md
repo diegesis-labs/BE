@@ -415,8 +415,9 @@ flowchart TD
 | `IdentityProvider`                     | Google                           | 다른 소셜 로그인              |
 | `BundleReader`                         | zip 묶음                           | AI 모델 서비스 호출 (2차 마일스톤) |
 | `LoginLookup` (관문이 로그인 상태를 찾습니다)     | `app/auth/repository.py`의 `AuthRepository` (PostgreSQL) | 로그인 상태 전용 저장소 |
+| `AuthStore` (로그인 `service`가 허용 목록, 사용자, 로그인 상태를 읽고 씁니다) | `app/auth/repository.py`의 `AuthRepository` (PostgreSQL) | 로그인 상태 전용 저장소 |
 
-공통 층(`app/core/`)은 기능 폴더와 어댑터를 import하지 않습니다. 관문처럼 공통 층이 기능 폴더의 저장소를 써야 하면 포트로 선언하고, 구현체는 `app/main.py`의 `create_app()`이 넣습니다. 공통 층과 기능 폴더의 `service`가 함께 쓰는 저장소의 레코드도 `app/core/ports.py`에 둡니다([ADR-029](ADR.md#adr-029-공통-층과-기능-폴더의-의존-방향)).
+포트(Protocol)는 모두 `app/core/ports.py`에 선언합니다. 기능 폴더의 `service`가 저장소에 기대하는 약속도 포트이며, 그 약속이 주고받는 레코드도 같은 파일에 둡니다. 공통 층(`app/core/`)은 기능 폴더와 어댑터를 import하지 않습니다. 관문처럼 공통 층이 기능 폴더의 저장소를 써야 하면 포트로 선언하고, 구현체는 `app/main.py`의 `create_app()`이 넣습니다([ADR-029](ADR.md#adr-029-공통-층과-기능-폴더의-의존-방향)).
 
 
 폴더 구조는 다음과 같습니다.

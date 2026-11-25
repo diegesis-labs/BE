@@ -303,7 +303,11 @@ Cookie: diegesis_session=EViRNy6gNGLqNHYCTW4x_31HEbe5gZOm1Uf02Q0SiQM
               BE-->>B: 302 /login?error=LOGIN_FAILED (users와 login_sessions를 바꾸지 않고 로그에 남김)
             else 둘 다 같은 행이 있거나, 둘 다 같은 행이 없음
               Note over BE,DB: 아래의 쓰기는 한 트랜잭션입니다.
-              BE->>DB: users에 등록하거나 이름을 갱신
+              BE->>DB: users에 등록하거나 이름을 갱신 (같은 이메일이나 google_sub의 행이 이미 있으면 만들지 않음)
+              opt 등록하려는데 겹친 요청이 같은 이메일이나 google_sub의 행을 먼저 만들었음
+                BE->>DB: 이메일이나 google_sub가 같은 users 행을 다시 조회
+                Note over BE,DB: 둘 다 같은 행이면 그 사용자로 이어서 로그인합니다.<br/>한쪽만 같으면 아무것도 쓰지 않고 302 /login?error=LOGIN_FAILED로 끝냅니다.
+              end
               BE->>DB: 요청의 diegesis_session이 가리키는 행과 그 사용자의 만료된 행을 지움
               BE->>BE: 임의의 쿠키 값을 만든다
               BE->>DB: login_sessions에 쿠키 값의 해시와 만료 시각(지금 + TTL)을 저장
@@ -312,7 +316,8 @@ Cookie: diegesis_session=EViRNy6gNGLqNHYCTW4x_31HEbe5gZOm1Uf02Q0SiQM
           end
         end
       end
-      Note over B,BE: 모든 응답에서 diegesis_oauth_state 쿠키를 지웁니다.
+      Note over B,BE: 302 응답은 모두 diegesis_oauth_state 쿠키를 지웁니다.
+      Note over B,DB: 데이터베이스에 닿지 못하거나 쓰기를 커밋하지 못하면 500 INTERNAL_ERROR입니다.<br/>이때에는 쿠키를 심지도 지우지도 않습니다(ADR-030).
     ```
 
 - **`POST /api/auth/logout`**: 로그아웃합니다.

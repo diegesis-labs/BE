@@ -59,7 +59,7 @@ docker compose로 서버와 데이터베이스를 함께 띄울 때에는 `.env`
 
 | 이름 | 뜻 | 기본값 | 예시 |
 | --- | --- | --- | --- |
-| `DATABASE_URL` | PostgreSQL에 접속하는 주소입니다. 사용자 이름, 비밀번호, 주소, 데이터베이스 이름이 들어갑니다. | 필수 | `postgresql+asyncpg://diegesis:diegesis@localhost:5432/diegesis` |
+| `DATABASE_URL` | PostgreSQL에 접속하는 주소입니다. 사용자 이름, 비밀번호, 주소, 데이터베이스 이름이 들어갑니다. 빈 값은 받지 않으며, 빈 값이면 서버가 시작되지 않습니다. | 필수 | `postgresql+asyncpg://diegesis:diegesis@localhost:5432/diegesis` |
 
 ### 3.3 로그인
 
