@@ -12,8 +12,10 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy.engine import Connection
 
+from app.auth import models as auth_models
 from app.core.config import get_settings
 from app.core.database import create_engine
+from app.core.models import Base
 
 config = context.config
 
@@ -22,8 +24,10 @@ if config.config_file_name is not None:
     # 테스트 안에서 마이그레이션을 돌려도 다른 로거가 살아 있어야 한다.
     fileConfig(config.config_file_name, disable_existing_loggers=False)
 
-# 기능 테이블의 모델이 아직 없으므로 비워 둔다. 모델이 생기면 그 MetaData를 넣는다.
-target_metadata = None
+# 모델 모듈을 import해야 그 테이블이 Base.metadata에 실린다. 기능의 모델을 더하면 여기에 더한다.
+# 빠뜨리면 `alembic revision --autogenerate`가 그 테이블을 지우는 리비전을 만든다.
+MODEL_MODULES = (auth_models,)
+target_metadata = Base.metadata
 
 
 def database_url() -> str:
