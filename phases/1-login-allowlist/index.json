@@ -21,7 +21,9 @@
     {
       "step": 2,
       "name": "auth-repository",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-11-25T14:26:27+0900",
+      "summary": "app/auth/repository.py에 AllowedEmail·UserRecord·ActiveLogin 레코드와 AuthRepository(커밋하지 않음, 이메일은 받은 그대로 비교, '지금'은 DB의 now()이고 find_active_login과 delete_expired_login_sessions가 한 조건 _active()와 그 부정을 씀, find_active_login은 login_sessions⋈users⟕allowed_emails 한 번의 질의로 행을 바꾸지 않음, ORM 객체 대신 컬럼을 읽음)와 get_auth_repository를 두고, app/core/database.py에 get_db_session(정상이면 커밋, 예외면 되돌림, 첫 질의 전에는 접속하지 않음)과 DbSession(scope=\"function\"이라 커밋이 응답 전에 끝남), 앱마다 처음 쓰일 때 app.state에 만드는 엔진과 이를 닫는 database_lifespan(main.py에 조립)을 더했다. 테스트는 tests/auth/test_repository.py(TC-1.1.6 포함 12개)와 tests/core/test_database.py의 get_db_session 6개이며, 반증 조건 16가지 틀린 구현을 잠시 넣어 모두 걸러지는 것을 확인했다"
     },
     {
       "step": 3,

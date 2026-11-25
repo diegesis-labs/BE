@@ -7,6 +7,7 @@
 
 from fastapi import FastAPI
 
+from app.core.database import database_lifespan
 from app.core.errors import register_error_handlers
 from app.health.router import router as health_router
 
@@ -21,6 +22,8 @@ def create_app() -> FastAPI:
         docs_url="/api/docs",
         redoc_url=None,
         swagger_ui_oauth2_redirect_url=None,
+        # 앱이 내려갈 때 그 앱의 데이터베이스 엔진을 닫는다. 시작할 때에는 설정을 읽지 않는다.
+        lifespan=database_lifespan,
     )
     # 모든 에러 응답을 {code, message, detail} 형식으로 바꾼다(docs/API.md 2.3절).
     register_error_handlers(app)
