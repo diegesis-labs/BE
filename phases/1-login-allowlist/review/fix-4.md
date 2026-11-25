@@ -1,7 +1,7 @@
 # 1-login-allowlist 리뷰 처분 — 4차
 
 > `review-4.md`의 결함 10건(critical 0 · major 0 · minor 10)에 대한 처분. 2026-11-26.
-> 고친 것 9건, 기각 0건, 사람 판단 필요 1건.
+> 고친 것 10건, 기각 0건, 사람 판단 필요 0건. (BEH-2는 처분 뒤에 사람이 정했다.)
 
 ## 고쳤다
 
@@ -16,6 +16,7 @@
 | TST-4 | minor | `test_login_check_judge.py::TestNoSecretsInOutput::test_render_snapshot_shows_display_name_for_the_person`. "로그인 후"의 A의 users 줄과 "로그아웃 전"의 `GET /api/me` 줄에 `display_name`과 그 값(`독자 A`)이 있는지 본다 | `6cc5d18` |
 | TST-5 | minor | `world` 픽스처가 `LOGIN_WAIT_SECONDS`를 2초로 줄인다. 배선이 고장 나도 테스트가 300초씩 멈추지 않고 2초 뒤에 빨개진다 | `aa0b343` |
 | ARC-1 | minor | service의 검사가 표준 라이브러리도 이름을 적은 것(`SERVICE_STANDARD_LIBRARY`)만 허용하고, `builtins.__import__`와 `importlib.__import__`를 문자열로 가져오는 함수로 센다. 검출기 사례에 `sqlite3`·`urllib.request`·`http.client`·`socket`·`builtins.__import__`·`importlib.__import__`를 더했다 | `8d8f1c7` |
+| BEH-2 | minor | 사람(백엔드 담당자)이 A를 골랐다(2026-11-26). 좁힌 범위를 ADR-032로 기록하고 ADR-031의 상태를 "일부 대체"로 바꿨다. E1 T1.7.2, testcase.md의 안내와 TC-1.7.5, MANUAL, 모듈 독스트링과 `observe`의 주석에 대조 범위를 적었다. 코드의 동작은 그대로다 | `e655e93` |
 
 ### COR-1 · COR-2 상세
 
@@ -50,13 +51,11 @@
 
 ## 사람 판단 필요
 
-| ID | 심각도 | 무엇을 정해야 하는가 | 선택지 |
-|---|---|---|---|
-| BEH-2 | minor | 3차 COR-4 처분이 쿠키 대조를 게스트 창의 화면 이동과 `/api` 요청으로 좁혔다(`scripts/login_check.py`의 `BrowserWatch.observe`). 그런데 ADR-031의 결정, E1 T1.7.2, testcase.md의 안내, 모듈 독스트링은 요청에 붙은 `Cookie`를 모두 대조한다고 적는다. 좁힌 범위를 결정으로 받아들이면 그 경위는 ADR-031에 남아야 하는데, 무인 처분은 ADR.md의 규칙을 코드에 맞춰 고치지 않는다 | A: 좁힌 범위를 받아들인다. ADR-031에 경위(다른 창의 탭이 보낸 요청에 붙은 평소 창의 쿠키를 거짓 보고하던 것)를 남기고, E1 T1.7.2와 testcase.md의 브라우저 안내, 모듈 독스트링에 대조 범위를 적는다. 코드는 그대로다 / B: 문서대로 모든 요청을 대조한다. `observe`의 조건을 없애 3차 COR-4 이전으로 되돌린다. 다른 창의 탭(끈 Vite의 재연결, 아이콘)이 평소 창의 쿠키를 붙이면 거짓 어긋남(종료 코드 1)이 다시 난다. 문서는 그대로다 |
+없음
 
 ## 커밋
 
-`aa0b343` 테스트(TST-5) · `4fadff5` RED(COR-1 · COR-2 · BEH-1) · `a915c80` 코드(COR-1 · COR-2 · BEH-1) · `6cc5d18` 테스트(TST-1 · TST-2 · TST-3 · TST-4) · `8d8f1c7` 테스트(ARC-1) · `a95a155` 문서(BEH-1)
+`aa0b343` 테스트(TST-5) · `4fadff5` RED(COR-1 · COR-2 · BEH-1) · `a915c80` 코드(COR-1 · COR-2 · BEH-1) · `6cc5d18` 테스트(TST-1 · TST-2 · TST-3 · TST-4) · `8d8f1c7` 테스트(ARC-1) · `a95a155` 문서(BEH-1) · `e655e93` 문서(BEH-2, 사람이 정함)
 
 ## 검증
 
@@ -88,4 +87,4 @@
 
 - COR-1의 남은 틈: 점검 2가 시작한 뒤 사람이 점검 1의 창을 새로 고치거나 그 창에서 화면을 옮기면, 그 화면 이동을 새 창의 것으로 읽는다. 그 창의 로그인 상태 쿠키는 로그아웃으로 지워졌으므로 판정이 달라지지 않을 것으로 보지만, 확인하지 않았다. 고치지 않았다.
 
-<!-- disposition: fixed=9 rejected=0 needs-human=1 -->
+<!-- disposition: fixed=10 rejected=0 needs-human=0 -->

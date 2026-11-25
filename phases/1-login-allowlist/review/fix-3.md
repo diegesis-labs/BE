@@ -1,7 +1,7 @@
 # 1-login-allowlist 리뷰 처분 — 3차
 
 > `review-3.md`의 결함 16건(critical 0 · major 1 · minor 15)에 대한 처분. 2026-11-26.
-> 고친 것 15건, 기각 0건, 사람 판단 필요 1건.
+> 고친 것 16건, 기각 0건, 사람 판단 필요 0건. (ARC-3은 처분 뒤에 사람이 정했다.)
 
 ## 고쳤다
 
@@ -22,6 +22,7 @@
 | TST-5 | minor | `test_login_check.py::TestRequestLinesAreNotPrinted`. capfd로 화면·411·400·502에서 쿼리의 code·state가 찍히지 않는지 본다 | `a54b1ac` |
 | BEH-1 | minor | `_parser()`의 description과 epilog를 ADR-031과 모듈 독스트링에 맞췄다(브라우저를 열거나 조종하지 않음, 게스트 창, 종료 코드 4의 뜻). 재현: `test_login_check_judge.py::TestSettings::test_help_describes_the_check_of_adr_031` | `3d1a5f5` `f8ff355` |
 | BEH-2 | minor | 리포트의 두 선택지 가운데 "사람이 대조한다고 적는다"를 골랐다(아래 상세). `render_report`가 `DISPLAY_NAME_NOTE`를 붙이고, 첫 줄을 "스크립트가 판정하는 칸은 모든 시점에서 표와 같다"로 바꿨다. README·MANUAL·`--help`·모듈 독스트링에도 적었다. 재현: `test_report_says_display_name_is_compared_by_person`과 두 `test_all_match_exits_0` | `3d1a5f5` `f8ff355` `0bca94e` |
+| ARC-3 | minor | 사람(백엔드 담당자)이 B를 골랐다(2026-11-26). 기능 폴더 안에서만 쓰는 저장소 포트의 구현체는 그 폴더의 라우터가 FastAPI 의존성으로 넣는다고 ADR-033으로 기록하고, ARCHITECTURE 8절에 포트의 종류마다 구현체를 넣는 곳을 표로 적었다. ADR-029는 바꾸지 않았다(공통 층의 포트에 관한 결정은 그대로다). 코드는 그대로다 | `e655e93` |
 
 ### TST-1 상세
 
@@ -57,13 +58,11 @@
 
 ## 사람 판단 필요
 
-| ID | 심각도 | 무엇을 정해야 하는가 | 선택지 |
-|---|---|---|---|
-| ARC-3 | minor | `AuthStore`(ARCHITECTURE 8절의 포트 표에 있음)의 구현체 `AuthRepository`를 `create_app()`이 아니라 `app/auth/router.py`의 의존성(`get_auth_repository`)이 고른다. ARCHITECTURE 8절은 "어댑터는 서버가 시작될 때 주입"과 "공통 층이 기능 폴더의 저장소를 쓰면 `create_app()`이 넣는다"만 정했다. 기능 폴더 안에서 쓰는 저장소 포트를 어디서 넣는지는 문서가 정하지 않았다 | A: `create_app()`이 `AuthStore`를 만드는 함수를 넣는다(`set_identity_provider_factory`와 같은 방식). `app/main.py`, `app/auth/router.py`, 라우터 테스트가 바뀌고 ARCHITECTURE 8절과 ADR-029에 적는다 / B: 기능 폴더 안에서 쓰는 저장소 포트는 그 라우터의 의존성이 넣는다고 ARCHITECTURE 8절과 ADR-029에 적는다. 코드는 그대로다 |
+없음
 
 ## 커밋
 
-`5dc6043` 테스트(ARC-1) · `a54b1ac` 테스트(TST-1 · TST-2 · TST-3 · TST-4 · TST-5) · `3d1a5f5` RED(COR-1 · COR-2 · COR-3 · COR-4 · COR-5 · SEC-1 · BEH-1 · BEH-2) · `f8ff355` 코드(같은 8건) · `0bca94e` 문서(ARC-4 · BEH-2)
+`5dc6043` 테스트(ARC-1) · `a54b1ac` 테스트(TST-1 · TST-2 · TST-3 · TST-4 · TST-5) · `3d1a5f5` RED(COR-1 · COR-2 · COR-3 · COR-4 · COR-5 · SEC-1 · BEH-1 · BEH-2) · `f8ff355` 코드(같은 8건) · `0bca94e` 문서(ARC-4 · BEH-2) · `e655e93` 문서(ARC-3, 사람이 정함)
 
 ## 검증
 
@@ -105,4 +104,4 @@
 
 - `browser_keeps_deleted_session`처럼 브라우저가 로그아웃의 지우는 `Set-Cookie`를 무시한 경우에도, 어긋남의 문장이 "이번 점검에서 심지 않은 … 쿠키를 붙였다. 새 게스트 창에서 시작했는지 확인한다"로 나온다. 원인이 새 창이 아닌데도 사람을 새 창 확인으로 안내한다. 고치지 않았다.
 
-<!-- disposition: fixed=15 rejected=0 needs-human=1 -->
+<!-- disposition: fixed=16 rejected=0 needs-human=0 -->
