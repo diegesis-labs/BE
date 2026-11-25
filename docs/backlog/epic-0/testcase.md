@@ -10,7 +10,7 @@ description: Epic 0의 Story가 지켜야 하는 것을 확인하는 테스트 �
 | TC | Story | 방식 | 케이스 | 합격 기준 | 대응 |
 | --- | --- | --- | --- | --- | --- |
 | TC-0.1.1 | S0.1 | unit | `DATABASE_URL`이 환경변수에도 `.env`에도 없는 상태로 설정을 읽습니다. | 설정을 읽는 순간 검증 오류가 납니다. **`DATABASE_URL`에 기본값을 넣으면 실패해야 합니다.** | CONFIGURATION.md 1절, 3.2절 |
-| TC-0.1.2 | S0.1 | unit | `.env`에 `DATABASE_URL`과 함께 설정 클래스에 없는 값(`GOOGLE_CLIENT_ID`, `APP_ENV` 등 `.env.example`에 있는 값)이 들어 있습니다. | 설정을 정상으로 읽습니다. **클래스에 없는 값을 거부하는 pydantic-settings의 기본 동작을 그대로 두면 실패해야 합니다.** | CONFIGURATION.md 1절 |
+| TC-0.1.2 | S0.1 | unit | `.env`에 `DATABASE_URL`과 함께 설정 클래스에 없는 값(`GOOGLE_CLIENT_ID`, `FRONTEND_URL` 등 `.env.example`에 있는 값)이 들어 있습니다. | 설정을 정상으로 읽습니다. **클래스에 없는 값을 거부하는 pydantic-settings의 기본 동작을 그대로 두면 실패해야 합니다.** | CONFIGURATION.md 1절 |
 | TC-0.1.3 | S0.1 | unit | 같은 이름의 값이 환경변수와 `.env`에 모두 있습니다. | 환경변수의 값을 씁니다. | CONFIGURATION.md 1절 |
 | TC-0.1.4 | S0.1 | unit | `PORT`와 `LOG_LEVEL`을 주지 않거나, `LOG_LEVEL`에 정해지지 않은 값을 줍니다. | 주지 않으면 `8080`과 `INFO`이고, 정해지지 않은 값을 주면 검증 오류가 납니다. | CONFIGURATION.md 3.1절 |
 | TC-0.1.5 | S0.1 | unit | `DATABASE_URL`이 없는 상태로 앱을 import하고 `/api/openapi.json`, `/openapi.json`, `/api/docs`를 요청합니다. | import가 실패하지 않습니다. `/api/openapi.json`은 200과 OpenAPI 문서를, `/api/docs`는 200을, `/openapi.json`은 404를 응답합니다. **OpenAPI를 기본 경로에 그대로 두면 실패해야 합니다.** | API.md 1절 |
@@ -69,6 +69,6 @@ description: Epic 0의 Story가 지켜야 하는 것을 확인하는 테스트 �
 - 배포 환경에서 이미지가 실행되는지는 판정하지 않습니다. 배포할 곳이 아직 정해지지 않았습니다(INFRA.md 3.1절).
 - GitHub Actions가 실제로 실행된 결과는 phase 안에서 판정하지 않습니다. phase가 끝난 뒤 PR과 병합에서 확인하며, Epic 문서의 "끝나는 조건"에 적었습니다.
 - 이미지의 크기와 빌드 시간은 판정하지 않습니다.
-- 기능 Epic의 설정값(`APP_ENV`, `GOOGLE_*` 등)이 설정 클래스에 없는 것은 결함이 아닙니다(CONFIGURATION.md 1절).
+- 기능 Epic의 설정값(`FRONTEND_URL`, `GOOGLE_*` 등)이 설정 클래스에 없는 것은 결함이 아닙니다(CONFIGURATION.md 1절).
 - `linux/arm64` 이미지가 Docker Hub에 없는 것은 결함이 아닙니다(D-37).
 - S0.6(README)에는 테스트 케이스가 없습니다. 그 step은 README에 적은 명령을 적힌 그대로 실행해서 확인합니다.

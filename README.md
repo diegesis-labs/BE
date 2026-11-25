@@ -110,16 +110,19 @@ ON CONFLICT (email) DO NOTHING;
 -- 역할을 바꿉니다.
 UPDATE allowed_emails SET role = 'admin' WHERE email = lower('reader@example.com');
 
--- 한 사람을 뺍니다. 그 사람은 다음 요청부터 403 NOT_ALLOWED를 받습니다.
-DELETE FROM allowed_emails WHERE email = lower('reader@example.com');
-
--- 뺀 사람의 로그인 상태도 지웁니다. 지우지 않아도 접근은 막히므로 꼭 하지 않아도 됩니다.
+-- 한 사람을 뺍니다. 그 사람의 로그인 상태도 같은 트랜잭션에서 함께 지웁니다.
+-- 그 사람은 다음 요청부터 막히고, 다시 로그인하려 하면 허용 목록 밖이라는 안내를 받습니다.
+BEGIN;
 DELETE FROM login_sessions
 WHERE user_id IN (SELECT id FROM users WHERE email = lower('reader@example.com'));
+DELETE FROM allowed_emails WHERE email = lower('reader@example.com');
+COMMIT;
 
 -- 허용 목록을 봅니다.
 SELECT email, role, created_at FROM allowed_emails ORDER BY created_at;
 ```
+
+허용 목록에서 뺐다가 다시 넣은 사람은 다시 로그인해야 합니다. 백엔드는 그 사람이 허용 목록에 들어간 시각보다 먼저 만든 로그인 상태를 받아들이지 않기 때문입니다([docs/ADR.md](docs/ADR.md#adr-027-로그인-흐름과-로그인-상태의-보안-보강)의 ADR-027). 역할만 바꾸는 SQL은 로그인 상태에 영향을 주지 않습니다.
 
 운영 환경의 데이터베이스에도 같은 SQL을 씁니다. 운영 환경의 데이터베이스에 접속하는 방법은 PostgreSQL을 둘 곳과 함께 정합니다([docs/INFRA.md](docs/INFRA.md#32-postgresql을-어디에-둘-것인가) 3.2절).
 
