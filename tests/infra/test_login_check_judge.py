@@ -448,6 +448,24 @@ class TestNoSecretsInOutput:
         # token_hash는 쿠키 값의 SHA-256과 같은지만 보여 준다.
         assert "SHA-256과 같다" in output
 
+    def test_render_snapshot_shows_display_name_for_the_person(self) -> None:
+        # display_name이 A의 Google 이름인지는 사람이 출력을 보고 대조한다(3차 리뷰 BEH-2). 그래서
+        # 로그인 후의 users 줄과 로그아웃 전의 GET /api/me 줄에 그 값이 읽을 수 있게 찍혀야 한다
+        # (4차 리뷰 TST-4). 문구와 모양은 보지 않는다.
+        after_login = render_snapshot(
+            "로그인 후", AFTER_LOGIN, allowed_email=A, denied_email=B
+        ).splitlines()
+        users_of_a = after_login[after_login.index("users") + 1]
+        assert users_of_a.startswith(f"  A {A}: ")
+        assert "display_name" in users_of_a and "독자 A" in users_of_a
+
+        before_logout = render_snapshot(
+            "로그아웃 전", BEFORE_LOGOUT, allowed_email=A, denied_email=B
+        ).splitlines()
+        [me_line] = [line for line in before_logout if "GET /api/me" in line]
+        assert "200" in me_line
+        assert "display_name" in me_line and "독자 A" in me_line
+
     def test_render_snapshot_says_when_token_hash_differs(self) -> None:
         output = render_snapshot("로그인 후", TOKEN_MISMATCH, allowed_email=A, denied_email=B)
         assert "SHA-256과 다르다" in output

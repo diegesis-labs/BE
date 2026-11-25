@@ -542,16 +542,24 @@ class TestRequestsSentTogether:
     """브라우저가 함께 보낸 요청은 응답이 끝난 순서가 아니라 보낸 때의 쿠키로 대조된다(3차 리뷰
     COR-2).
 
-    사람이 [로그아웃]을 겹쳐 누르면 같은 쿠키를 붙인 로그아웃 두 개가 함께 간다. 뒤에 보낸 것의
-    응답이 먼저 끝나 쿠키를 지워도, 앞에 보낸 것은 지우기 전에 보냈으므로 그 쿠키를 붙인 것이 맞다.
+    사람이 [로그아웃]을 겹쳐 누르면 같은 쿠키를 붙인 로그아웃 두 개가 함께 간다. 둘의 응답은 어느
+    쪽이든 먼저 끝날 수 있다(4차 리뷰 TST-1).
+
+    - 먼저 보낸 것이 나중에 끝난다. 뒤에 보낸 것의 응답이 먼저 쿠키를 지워도, 앞의 것은 지우기 전에
+      보냈으므로 그 쿠키를 붙인 것이 맞다.
+    - 먼저 보낸 것이 먼저 끝난다. 뒤에 보낸 것은 앞의 응답이 기록되기 전에 이미 대역 서버가
+      받았으므로, 역시 지우기 전의 쿠키를 붙인 것이 맞다. 셈의 히스토리를 받은 순번으로 매기거나,
+      받은 순번과 기록한 순번을 다른 카운터에서 매기면 이 경우를 거짓 보고한다.
     """
 
-    def test_two_logouts_sent_together_are_not_reported(self) -> None:
+    @pytest.mark.parametrize("first_finishes_first", [False, True])
+    def test_two_logouts_sent_together_are_not_reported(self, first_finishes_first: bool) -> None:
         token = "sessionSentTogether9"
         lock = threading.Lock()
         observed: list[Exchange] = []
         first_arrived = threading.Event()
-        later_recorded = threading.Event()
+        second_arrived = threading.Event()
+        one_recorded = threading.Event()
         logouts: list[int] = []
 
         class Handler(BaseHTTPRequestHandler):
@@ -569,9 +577,19 @@ class TestRequestsSentTogether:
                     order = len(logouts)
                     logouts.append(order)
                 if order == 0:
-                    # 먼저 온 로그아웃은, 뒤에 온 것이 끝나 기록된 다음에 응답한다.
                     first_arrived.set()
-                    later_recorded.wait(5)
+                    if first_finishes_first:
+                        # 뒤에 보낸 것이 대역 서버를 지나 백엔드에 닿은 다음에 응답한다. 그때
+                        # 대역 서버는 뒤의 것을 받은 순번을 이미 매겼다.
+                        second_arrived.wait(5)
+                    else:
+                        # 뒤에 보낸 것이 끝나 기록된 다음에 응답한다.
+                        one_recorded.wait(5)
+                else:
+                    second_arrived.set()
+                    if first_finishes_first:
+                        # 먼저 보낸 것이 끝나 기록된 다음에 응답한다.
+                        one_recorded.wait(5)
                 self.send_response_only(204)
                 self.send_header("Set-Cookie", f"{SESSION_COOKIE}=; Path=/; Max-Age=0")
                 self.end_headers()
@@ -584,7 +602,7 @@ class TestRequestsSentTogether:
                 observed.append(exchange)
                 recorded_logouts = [e for e in observed if e.target == LOGOUT_PATH]
             if len(recorded_logouts) == 1:
-                later_recorded.set()
+                one_recorded.set()
 
         backend = ThreadingHTTPServer((LOOPBACK, 0), Handler)
         backend_thread = threading.Thread(
@@ -612,7 +630,8 @@ class TestRequestsSentTogether:
             later.join(5)
             first.join(5)
         finally:
-            later_recorded.set()
+            second_arrived.set()
+            one_recorded.set()
             stand_in.stop()
             backend.shutdown()
             backend.server_close()
@@ -623,10 +642,24 @@ class TestRequestsSentTogether:
             ("POST", LOGOUT_PATH),
             ("POST", LOGOUT_PATH),
         ]
+        # 기록된 차례로 a, b다. 테스트가 뜻한 순서로 받고 기록했는지 순번으로 확인한다.
+        (a_received, a_recorded), (b_received, b_recorded) = (
+            ticks(e) for e in observed if e.target == LOGOUT_PATH
+        )
+        if first_finishes_first:
+            assert a_received < b_received < a_recorded < b_recorded
+        else:
+            assert b_received < a_received < a_recorded < b_recorded
         watch = BrowserWatch("http://localhost:5173")
         for exchange in observed:
             watch.observe(exchange)
         assert watch.take_problems() == []
+
+
+def ticks(exchange: Exchange) -> tuple[int, int]:
+    """대역 서버가 매긴 (받은 순번, 기록한 순번)."""
+    assert exchange.received is not None and exchange.recorded is not None
+    return exchange.received, exchange.recorded
 
 
 class TestRecordBeforeResponse:

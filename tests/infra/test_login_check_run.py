@@ -26,8 +26,9 @@ test_login_check_observe.py가, `main`이 종료 코드를 고르는 것은 test
   다음 안내가 나오면 앞의 안내는 따르지 못하고 가장 나중의 안내만 따른다. 그래서 층이 기다려야 할
   요청을 기다리지 않고 다음 안내로 넘어가면 표와 다른 상태가 찍힌다.
 - 대역 서버가 기록하는 시각은 가짜 시계에서 나온다. 사람이 안내 하나를 따르는 데 몇 분이 걸리고,
-  브라우저가 요청 하나를 보내는 데 1초가 걸린다. 그래서 층이 로그인 결과 처리가 아닌 요청의 시각을
-  판정에 넘기면 created_at과 expires_at의 칸이 어긋난다.
+  Google 화면에서 계정을 고르는 데 2분이 걸리고, 브라우저가 요청 하나를 보내는 데 1초가 걸린다.
+  그래서 층이 로그인 결과 처리가 아닌 요청(로그인 시작 등)의 시각을 판정에 넘기면 created_at과
+  expires_at의 칸이 어긋난다.
 - 고장은 표의 칸(테이블, 쿠키, 상태 코드, 주소)마다, 그리고 쿠키를 대조하는 여섯 시점마다 하나 이상
   있다. 쿠키의 대조는 스냅숏에 찍히지 않으므로, 층이 시점마다 대조의 결과를 모으지 않으면 고장이
   보고되지 않는다.
@@ -109,6 +110,9 @@ SETTINGS = CheckSettings(frontend_url=FRONTEND, api_port=API_PORT, db_port=DB_PO
 START = datetime(2026, 1, 5, 9, 0, tzinfo=UTC)
 STEP_GAP = timedelta(minutes=3)
 HOP = timedelta(seconds=1)
+# 사람이 Google 화면에서 계정을 고르는 데 걸리는 시간. 이것도 표의 "1분 안"보다 길어서, 층이 로그인
+# 결과 처리 대신 같은 안내 안의 로그인 시작의 시각을 넘겨도 어긋난다(4차 리뷰 TST-3).
+GOOGLE_GAP = timedelta(minutes=2)
 ALLOWED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 # 두 계정 말고 다른 사람의 로그인 상태의 수. 점검 2는 login_sessions의 전체 행의 수만 본다.
 OTHER_SESSIONS = 3
@@ -345,10 +349,11 @@ class FakeWorld:
     """안내대로 따라 하는 사람과, 표대로 움직이는 브라우저, 서버, 데이터베이스.
 
     faults에 FAULTS나 WIRED의 이름을 넣으면 그 자리에서만 표와 다르게 움직인다. CROSSING의 이름을
-    넣으면 사람이 점검 1의 창에서 누른 것이 점검 2가 시작한 뒤에 대역 서버를 지난다. idle_step에
-    안내의 이름을 넣으면 사람이 그 안내를 따르지 않는다. 그때 noise에 수를 넣으면, 사람이 연 화면이
-    그 수만큼 NOISE_INTERVAL마다 기다리는 것과 상관없는 요청을 보낸다. *_error에 예외를 넣으면 그
-    자리에서 낸다.
+    넣으면 사람이 점검 1의 창에서 누른 것이 점검 2가 시작한 뒤에 대역 서버를 지난다. faults에
+    google_blocks_login을 넣으면 사람이 [Google로 로그인]을 눌러도 Google이 결과 처리로 보내지
+    않는다. idle_at에 수를 넣으면 사람이 그 차례(0부터)의 안내를 따르지 않는다. 그때 noise에 수를
+    넣으면, 사람이 연 화면이 그 수만큼 NOISE_INTERVAL마다 기다리는 것과 상관없는 요청을 보낸다.
+    *_error에 예외를 넣으면 그 자리에서 낸다.
     """
 
     NOISE_INTERVAL = 0.1
@@ -359,7 +364,7 @@ class FakeWorld:
     def __init__(self, *, frontend: str = FRONTEND) -> None:
         self.frontend = frontend
         self.faults: set[str] = set()
-        self.idle_step: str | None = None
+        self.idle_at: int | None = None
         self.noise = 0
         self.noise_sent = 0
         self.read_error: Exception | None = None
@@ -419,11 +424,15 @@ class FakeWorld:
 
         그 전에 다음 안내가 나오면 앞의 안내는 따르지 못한다.
         """
+        index = len(self.messages)
         self.log.append(f"ask:{step}")
         self.messages.append(message)
         if self._pending is not None:
             self._pending.cancel()
         loop = asyncio.get_running_loop()
+        if index == self.idle_at:
+            self._pending = loop.call_soon(self._idle)
+            return
         if step == STEP_REOPEN and "late_second_logout_click" in self.faults:
             # 사람이 점검 1의 창에서 [로그아웃]을 한 번 더 누른 것이, 점검 2가 기다리기 시작한 뒤에
             # 대역 서버를 지난다. 새 게스트 창은 그다음에 연다.
@@ -435,12 +444,13 @@ class FakeWorld:
             loop.call_soon(self._finish_held_logout)
         self._pending = loop.call_soon(self._act, step)
 
+    def _idle(self) -> None:
+        self._pending = None
+        if self.noise:
+            self._send_noise(self.noise)
+
     def _act(self, step: str) -> None:
         self._pending = None
-        if step == self.idle_step:
-            if self.noise:
-                self._send_noise(self.noise)
-            return
         self.log.append(f"do:{step}")
         self.now += STEP_GAP
         if step in (STEP_OPEN, STEP_REOPEN):
@@ -451,7 +461,10 @@ class FakeWorld:
             self._request("GET", ME_PATH, navigation=False)
         elif step == STEP_LOG_IN:
             self._navigate(LOGIN_PATH)
+            if "google_blocks_login" in self.faults:
+                return
             # 사람이 Google 화면에서 계정을 고르면, Google이 브라우저를 결과 처리로 보낸다.
+            self.now += GOOGLE_GAP
             self._navigate(f"{CALLBACK_PATH}?code=CODESECRET1&state=STATESECRET2")
         elif step == STEP_ME:
             self._request("GET", ME_PATH, navigation=False)
@@ -795,7 +808,7 @@ class TestAbortedChecks:
     ) -> None:
         # Google이 로그인을 막거나 사람이 계정을 고르지 않으면 결과 처리가 지나가지 않는다.
         monkeypatch.setattr(login_check, "LOGIN_WAIT_SECONDS", 0.05)
-        world.idle_step = STEP_LOG_IN
+        world.idle_at = 1  # 점검 1의 로그인
 
         with pytest.raises(CheckAbortedError) as raised:
             await run_checks(SETTINGS, ARGS)
@@ -811,7 +824,7 @@ class TestAbortedChecks:
         # 그 시간이 늘어나지 않는다(3차 리뷰 TST-1). 상관없는 요청은 기다리는 시간보다 짧은 간격으로
         # 오므로, 요청마다 기다리는 시간을 새로 잡으면 요청이 끊길 때까지 끝나지 않는다.
         monkeypatch.setattr(login_check, "LOGIN_WAIT_SECONDS", 0.3)
-        world.idle_step = STEP_LOG_IN
+        world.idle_at = 1  # 점검 1의 로그인
         world.noise = 30
 
         try:
@@ -834,6 +847,12 @@ class TestAbortedChecks:
                 1,
                 [f"[점검 1 · 로그인 후] {cookie_text('missing', SESSION_COOKIE, 'GET /')}"],
             ),
+            # 점검 2에서도 같다. 다섯 번째 읽기는 점검 2의 로그인 전이다(4차 리뷰 TST-2).
+            (
+                "stale_cookie_in_denied_window",
+                4,
+                WIRED["stale_cookie_in_denied_window"][:1],
+            ),
         ],
     )
     async def test_mismatches_found_before_the_abort_are_kept(
@@ -851,17 +870,38 @@ class TestAbortedChecks:
         for kept, expected in zip(raised.value.found, found, strict=True):
             assert kept.startswith(expected), kept
 
+    @pytest.mark.parametrize(
+        ("faults", "idle_at", "found"),
+        [
+            # 점검 1: Google이 로그인을 막아 결과 처리를 기다리다 끝난다. 그 전에 로그인 시작에서
+            # 본 쿠키의 어긋남(끝내지 못한 시점의 것)도 남는다.
+            (
+                {"stale_cookie_in_browser", "google_blocks_login"},
+                None,
+                WIRED["stale_cookie_in_browser"],
+            ),
+            # 점검 2: 로그인 시도 뒤의 내 정보 확인(일곱 번째 안내)을 기다리다 끝난다. 그 전에
+            # 로그인 시작에서 본 쿠키의 어긋남도 남는다(4차 리뷰 TST-2).
+            ({"stale_cookie_in_denied_window"}, 6, WIRED["stale_cookie_in_denied_window"]),
+        ],
+    )
     async def test_mismatches_found_before_the_timeout_are_kept(
-        self, world: FakeWorld, monkeypatch: pytest.MonkeyPatch
+        self,
+        world: FakeWorld,
+        monkeypatch: pytest.MonkeyPatch,
+        faults: set[str],
+        idle_at: int | None,
+        found: list[str],
     ) -> None:
-        monkeypatch.setattr(login_check, "LOGIN_WAIT_SECONDS", 0.05)
-        world.faults = {"stale_cookie_in_browser"}
-        world.idle_step = STEP_LOG_IN
+        # 점검 2까지 가는 동안 안내마다 이만큼 기다린다. 너무 짧으면 앞의 안내에서 끝날 수 있다.
+        monkeypatch.setattr(login_check, "LOGIN_WAIT_SECONDS", 0.5)
+        world.faults = faults
+        world.idle_at = idle_at
 
         with pytest.raises(CheckAbortedError) as raised:
             await run_checks(SETTINGS, ARGS)
 
-        assert list(raised.value.found) == WIRED["stale_cookie_in_browser"][:1]
+        assert list(raised.value.found) == found
 
     async def test_stand_in_port_failure_is_aborted_before_asking(self, world: FakeWorld) -> None:
         world.stand_in_error = OSError(48, "Address already in use")
