@@ -26,6 +26,7 @@ diff의 코드가 **자기가 하려는 일을 실제로 하는가**를 본다. 
 **전례**
 
 - compose의 db healthcheck가 `pg_isready`에 호스트를 주지 않아 유닉스 소켓만 봤다. pgvector 이미지의 첫 초기화 중 임시 서버(`listen_addresses=''`)가 뜬 순간 healthy가 되어, TCP로 붙는 migrate가 거부당할 수 있었다(Epic 0 COR-1). `depends_on: service_healthy`가 기대는 healthcheck가 뒤따르는 서비스와 같은 경로(TCP)로 확인하는지 본다.
+- 로그인 결과 처리가 "쌍을 조회해 없으면 INSERT"를 믿었다. 그런데 같은 사람의 첫 로그인 두 개가 겹치면 둘 다 "없음"을 본 뒤 한쪽 INSERT가 `uq_users_email`에 걸려 500으로 끝났다(Epic 1 COR-1). 고유 제약이 있는 테이블에 조회한 뒤 넣는 경로가 있으면, `ON CONFLICT`나 위반 처리로 경합을 닫았는지, 실제 DB에서 두 요청을 겹쳐 돌려 봤는지 본다.
 
 **보지 않는 것** — 문서/요구사항 대조(behavioral), 테스트가 무엇을 단언하는가(test coverage), 파일 배치와 규칙 위반(architecture).
 
@@ -49,7 +50,7 @@ diff의 코드가 **자기가 하려는 일을 실제로 하는가**를 본다. 
 
 **전례**
 
-- 아직 없다.
+- 로그에 비밀값이 없는지를 caplog와 TestClient로만 확인했다. 그런데 운영의 uvicorn 접근 로그(INFO, 기본값)가 쿼리를 포함한 경로를 남겨, OAuth 결과 처리의 `code`와 `state`가 평문으로 남았다(Epic 1 SEC-1). 쿼리로 비밀값을 받는 경로가 생기면, 실제 진입점(`python -m app`)으로 띄운 서버의 출력까지 확인하는지 본다.
 
 **보지 않는 것** — 일반 버그(correctness), 디렉터리 구조(architecture). 실제 공격 경로를 그릴 수 없는 "이론적으로 위험" 항목은 minor 이하로 두거나 버려라.
 
