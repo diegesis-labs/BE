@@ -189,9 +189,11 @@ sequenceDiagram
 ```mermaid
 erDiagram
   allowed_emails {
-    string email PK "허용된 Google 이메일"
-    string role "user 또는 admin"
+    text email PK "허용된 Google 이메일. 소문자만 (CHECK)"
+    text role "user 또는 admin (CHECK)"
+    timestamptz created_at "기본값 now()"
   }
+  allowed_emails |o..o| users : "이메일 값으로 대응 (FK 아님)"
 
   users ||--o{ login_sessions : "로그인한다"
   users ||--|| user_settings : "설정을 가진다"
@@ -201,15 +203,16 @@ erDiagram
   users ||--o{ track_likes : "좋아한다"
   users {
     uuid id PK
-    string email "Google 이메일"
-    string display_name
-    timestamp created_at
+    text email UK "Google 이메일. 소문자만 (CHECK)"
+    text google_sub UK "Google 계정의 식별자(sub)"
+    text display_name "Google 계정의 이름. 비어 있을 수 있음 (NULL)"
+    timestamptz created_at "기본값 now()"
   }
   login_sessions {
-    string token_hash PK "쿠키에 담긴 값의 해시"
-    uuid user_id FK
-    timestamp expires_at
-    timestamp created_at
+    text token_hash PK "쿠키에 담긴 값의 SHA-256 해시"
+    uuid user_id FK "users 행을 지우면 함께 지움 (ON DELETE CASCADE)"
+    timestamptz expires_at "만든 시각 + LOGIN_SESSION_TTL_HOURS. 늘리지 않음"
+    timestamptz created_at "기본값 now()"
   }
   user_settings {
     uuid user_id PK
@@ -343,9 +346,23 @@ erDiagram
   }
 ```
 
-이 그림은 초안이며, 컬럼의 세부 타입과 인덱스는 구현하면서 정합니다. `PK`가 여러 컬럼에 붙어 있는 테이블은 그 컬럼들의 조합이 한 줄을 가리킨다는 뜻입니다. 그림을 읽을 때 알아 두면 좋은 점은 다음과 같습니다.
+이 그림은 데이터 모델의 유일한 원천이며, Epic 문서는 이 그림을 가리키기만 합니다([DECISIONS.md](DECISIONS.md)의 D-56). 테이블의 세부 타입과 제약은 그 테이블을 만드는 Epic의 계약을 정할 때 이 그림에 확정합니다. 그래서 타입이 PostgreSQL의 타입(`text`, `timestamptz` 등)으로 적힌 테이블은 확정된 것이고, `string`이나 `timestamp`처럼 적힌 테이블은 아직 초안입니다. `PK`가 여러 컬럼에 붙어 있는 테이블은 그 컬럼들의 조합이 한 줄을 가리킨다는 뜻입니다. 그림을 읽을 때 알아 두면 좋은 점은 다음과 같습니다.
 
-- **사용자 영역**에서는 `allowed_emails`가 출입문 역할을 합니다. Google 로그인에 성공하더라도 이 목록에 이메일이 없으면 `users`에 등록되지 않습니다. 그리고 `role`이 `admin`인 사람만 관리자 API를 쓸 수 있습니다. 한편 `login_sessions`는 로그인 상태를 한 줄씩 담으며, 쿠키의 값을 그대로 저장하지 않고 해시로 바꿔서 저장합니다.
+- **사용자 영역**에서는 `allowed_emails`가 출입문 역할을 합니다. Google 로그인에 성공하더라도 이 목록에 이메일이 없으면 `users`에 등록되지 않습니다. 그리고 `role`이 `admin`인 사람만 관리자 API를 쓸 수 있습니다. 백엔드는 보호된 경로의 요청마다 이 테이블을 확인하므로, 목록에서 빠지거나 역할이 바뀐 사람에게는 다음 요청부터 그 결과가 적용됩니다. 허용 목록은 관리 API 없이 SQL로 넣고 빼며, 그 SQL은 [README](../README.md#허용-목록에-사람-넣고-빼기)에 있습니다([ADR-024](ADR.md#adr-024-허용-목록의-관리와-확인)). `allowed_emails`와 `users`는 외래 키로 잇지 않고 이메일 값으로만 대응합니다. 아직 로그인한 적이 없는 사람도 허용 목록에 있을 수 있고, 목록에서 빠진 사람의 `users` 행과 기록은 그대로 남아야 하기 때문입니다. 두 테이블의 이메일은 소문자로만 저장하며, `CHECK (email = lower(email))` 제약이 이를 강제합니다. 이 세 테이블에서 `users.display_name`을 뺀 컬럼은 모두 `NOT NULL`입니다.
+
+  `users`는 사람을 이메일과 Google 계정의 식별자(`google_sub`, OpenID Connect의 `sub`)의 쌍으로 식별합니다. Google에서는 한 이메일 주소가 시간이 지나 다른 Google 계정에 붙을 수 있지만, `sub`는 계정마다 다르고 다시 쓰이지 않습니다. 그래서 처음 로그인할 때 두 값을 함께 저장하고, 그 뒤에 이메일만 같거나 `google_sub`만 같은 계정이 로그인하면 거부합니다([ADR-027](ADR.md#adr-027-로그인-흐름과-로그인-상태의-보안-보강)). 허용 목록은 이메일로 확인합니다.
+
+  `login_sessions`는 로그인 상태를 한 줄씩 담으며, 쿠키의 값을 그대로 저장하지 않고 SHA-256 해시로 바꿔서 저장합니다. 사용자 한 명의 로그인 상태를 찾거나 지울 수 있도록 `login_sessions(user_id)`에 인덱스를 둡니다. 로그인 상태의 수명은 다음과 같이 관리합니다([ADR-027](ADR.md#adr-027-로그인-흐름과-로그인-상태의-보안-보강)).
+
+  | 때 | 하는 일 |
+  | --- | --- |
+  | 로그인에 성공했을 때 | 새 행을 만듭니다. `expires_at`은 지금에 `LOGIN_SESSION_TTL_HOURS`를 더한 시각입니다. 같은 트랜잭션에서, 요청에 붙어 온 옛 `diegesis_session`이 가리키는 행과 그 사용자의 만료된 행을 지웁니다. |
+  | 보호된 경로를 요청할 때 | `expires_at`이 지금보다 뒤이고, `created_at`이 그 사람의 `allowed_emails.created_at`과 같거나 그보다 늦은 행만 받아들입니다. 행을 바꾸지 않으므로 `expires_at`은 늘어나지 않습니다. |
+  | 로그아웃할 때 | 요청에 붙은 쿠키의 행만 지웁니다. 같은 사람이 다른 기기에서 만든 행은 그대로 둡니다. |
+  | 허용 목록에서 사람을 뺄 때 | README의 SQL이 같은 트랜잭션에서 그 사람의 행을 모두 지웁니다. 지우지 않았더라도, 그 사람을 다시 넣으면 `allowed_emails.created_at`이 새로 정해지므로 옛 행은 받아들여지지 않습니다. |
+
+  따로 도는 정리 작업은 두지 않습니다. 만료된 행은 조회할 때 거르고, 그 사용자가 다시 로그인할 때 지웁니다. 로그인 상태를 오래 쓰지 않아도 만료 시각 전에는 끊지 않습니다. 즉 유휴 만료는 두지 않습니다.
+
 - **책 영역**에서는 책 한 권이 여러 버전을 가질 수 있고, 챕터와 장면은 특정 버전에 속합니다. 챕터의 본문은 문단과 문장으로 묶은 JSON 하나로 `content`에 저장하며, 그 모양은 [API.md 4.6절](API.md#46-챕터-본문) 응답의 `paragraphs`와 같습니다. 따라서 문장 인덱스는 `content` 안에 들어 있고, 문장마다 행을 따로 두지 않습니다. 그 대신 챕터의 첫 문장 인덱스와 마지막 문장 인덱스를 컬럼으로 두어, 위치 알림으로 받은 문장 인덱스가 그 챕터 안에 있는지 확인합니다. 그리고 장면은 시작 문장 인덱스와 끝 문장 인덱스로 범위를 표현합니다.
 - **평가 라벨**은 장면과 구간에 같은 네 컬럼(`valence`, `arousal`, `tags`, `gems`)으로 붙습니다. 선곡에는 쓰지 않고, 평가 자료를 내보낼 때 선곡 기록과 함께 내보냅니다. 값의 규칙은 [AI_CONTRACT.md 2절](AI_CONTRACT.md#라벨에-대한-규칙)에, 이렇게 정한 이유는 [ADR-018](ADR.md#adr-018-평가-라벨을-받는-방식)에 있습니다.
 - **음악 영역**에서는 곡이 여러 구간으로 나뉘고, 벡터는 구간마다 붙습니다. 곡과 구간의 ID는 AI 레포가 붙인 것을 그대로 씁니다. 그리고 구간의 `is_active`는 검색 대상인지를 뜻하며, 곡과 구간은 지우지 않습니다(5절).
@@ -413,7 +430,7 @@ BE/
 │   ├── music/             # 곡, 구간, 음원 주소
 │   ├── recommendation/    # 장면 선택, 후보 검색, 선곡 기록
 │   ├── playback/          # 재생 이벤트, 좋아요, 싫어요한 구간 제외
-│   ├── admin/             # 묶음 적재, 허용 목록 관리, 평가 자료 내보내기
+│   ├── admin/             # 묶음 적재, 평가 자료 내보내기
 │   └── adapters/          # 포트의 구현체 (pgvector, storage, google, bundle)
 ├── migrations/            # 데이터베이스 구조 변경 이력 (Alembic)
 ├── tests/                 # app/ 과 같은 구조로 둔다.
@@ -463,5 +480,5 @@ BE/
 
 다음 항목은 이 문서에서 정하지 않고 구현하는 사람에게 맡깁니다.
 
-- 테이블 컬럼의 세부 타입과 인덱스
+- 6절의 그림에서 아직 초안인 테이블의 세부 타입과 인덱스. 그 테이블을 만드는 Epic의 계약을 정할 때 6절의 그림에 확정합니다.
 - 후보의 수 k의 기본값 (설정값으로 조정할 수 있게 둡니다)

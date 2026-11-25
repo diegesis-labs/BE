@@ -49,9 +49,8 @@ cp .env.example .env
 
 | 이름 | 뜻 | 기본값 | 예시 |
 | --- | --- | --- | --- |
-| `APP_ENV` | 실행 환경의 이름입니다. `local`, `production` 가운데 하나입니다. `production`에서는 쿠키를 HTTPS로만 보냅니다. | `local` | `production` |
 | `PORT` | 서버가 요청을 받는 포트입니다. 프론트엔드의 개발 서버가 `8080`으로 요청을 넘기도록 설정되어 있습니다. | `8080` | `8080` |
-| `FRONTEND_URL` | 프론트엔드의 주소입니다. 로그인을 마친 사용자를 이 주소로 돌려보내고, 이 주소에서 온 요청만 허용합니다. | 필수 | `http://localhost:5173` |
+| `FRONTEND_URL` | 프론트엔드의 주소입니다. 로그인을 마친 사용자를 이 주소로 돌려보냅니다. 그리고 이 값 뒤에 `/api/auth/google/callback`을 붙여 Google이 로그인 결과를 돌려보낼 주소를 만듭니다. 그래서 Google 콘솔에 등록하는 돌아올 주소도 이 값을 따릅니다([INFRA.md 3.5절](INFRA.md#35-google-로그인-설정)). 이 값은 쿠키와 요청의 확인에도 쓰입니다. 이 값이 `https`로 시작하면 쿠키에 `Secure`를 붙이고, 상태를 바꾸는 요청은 `Origin`이 이 값과 같아야 받아들입니다([API.md 2.4절](API.md#24-상태를-바꾸는-요청의-출처-확인)). 스킴, 호스트, 포트만 적고 끝에 `/`를 붙이지 않으며, `http`는 호스트가 `localhost`나 `127.0.0.1`일 때만 쓸 수 있습니다. 이 조건에 맞지 않으면 서버가 시작되지 않습니다([ADR-027](ADR.md#adr-027-로그인-흐름과-로그인-상태의-보안-보강)). 프론트엔드와 백엔드가 같은 주소를 쓰므로 CORS는 설정하지 않습니다. | 필수 | `http://localhost:5173` |
 | `LOG_LEVEL` | 로그를 얼마나 자세히 남길지 정합니다. `DEBUG`, `INFO`, `WARNING`, `ERROR` 가운데 하나입니다. | `INFO` | `DEBUG` |
 
 ### 3.2 데이터베이스
@@ -66,9 +65,10 @@ cp .env.example .env
 | --- | --- | --- | --- |
 | `GOOGLE_CLIENT_ID` | Google 로그인을 위해 Google Cloud 콘솔에서 발급받은 클라이언트 ID입니다. | 필수 | `1234567890-abc.apps.googleusercontent.com` |
 | `GOOGLE_CLIENT_SECRET` | 위 클라이언트 ID와 짝을 이루는 비밀값입니다. | 필수 | (비밀값이므로 예시를 적지 않습니다) |
-| `BOOTSTRAP_ADMIN_EMAILS` | 서버가 시작할 때 허용 목록에 관리자로 넣어 둘 이메일입니다. 허용 목록이 비어 있으면 아무도 들어올 수 없으므로, 첫 관리자를 이 값으로 지정합니다. 여러 명이면 쉼표로 구분합니다. | 필수 | `admin@example.com,lead@example.com` |
-| `LOGIN_SESSION_TTL_HOURS` | 로그인 상태가 유지되는 시간입니다. 이 시간이 지나면 다시 로그인해야 합니다. | `336` (14일) | `720` |
+| `LOGIN_SESSION_TTL_HOURS` | 로그인 상태가 유지되는 시간입니다. 로그인한 때부터 세며, 로그인 상태를 쓰는 동안에도 늘어나지 않습니다. 이 시간이 지나면 다시 로그인해야 합니다. | `336` (14일) | `720` |
 | `LOGIN_COOKIE_NAME` | 로그인 상태를 식별하는 쿠키의 이름입니다. | `diegesis_session` | `diegesis_session` |
+
+허용 목록과 관리자는 설정값이 아니라 데이터베이스의 `allowed_emails` 테이블에 있습니다. 그래서 첫 관리자도 [README](../README.md#허용-목록에-사람-넣고-빼기)의 SQL로 넣습니다([ADR-024](ADR.md#adr-024-허용-목록의-관리와-확인)).
 
 ### 3.4 선곡
 
@@ -101,7 +101,6 @@ cp .env.example .env
 
 ```dotenv
 # 서버
-APP_ENV=local
 PORT=8080
 FRONTEND_URL=http://localhost:5173
 LOG_LEVEL=DEBUG
@@ -112,7 +111,6 @@ DATABASE_URL=postgresql+asyncpg://diegesis:diegesis@localhost:5432/diegesis
 # 로그인
 GOOGLE_CLIENT_ID=1234567890-abc.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=여기에_비밀값을_넣습니다
-BOOTSTRAP_ADMIN_EMAILS=admin@example.com
 LOGIN_SESSION_TTL_HOURS=336
 
 # 선곡

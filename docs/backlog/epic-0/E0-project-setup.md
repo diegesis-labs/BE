@@ -43,7 +43,7 @@ PR을 연 뒤와 `main`에 합친 뒤에 확인하는 것은 다음과 같습니
 | --- | --- |
 | 사용자, 책, 곡, 기록 같은 기능 테이블과 그 마이그레이션 | 각 기능의 Epic |
 | Google 로그인, 허용 목록, CORS(`FRONTEND_URL`) | 로그인 Epic |
-| 설정값 가운데 이번 Epic의 코드가 읽지 않는 값(`APP_ENV`, `GOOGLE_*` 등) | 그 값을 쓰는 Epic([CONFIGURATION.md](../../CONFIGURATION.md) 1절) |
+| 설정값 가운데 이번 Epic의 코드가 읽지 않는 값(`FRONTEND_URL`, `GOOGLE_*` 등) | 그 값을 쓰는 Epic([CONFIGURATION.md](../../CONFIGURATION.md) 1절) |
 | 배포 환경에 새 이미지를 반영하는 일, 배포 환경에서 마이그레이션을 실행하는 시점 | 인프라가 정해진 뒤([INFRA.md](../../INFRA.md) 3.7절) |
 | 데이터베이스까지 확인하는 준비 상태 확인 엔드포인트 | 배포 환경이 요구할 때(D-39) |
 | `linux/arm64` 이미지의 push | 배포 환경이 요구할 때(D-37) |
