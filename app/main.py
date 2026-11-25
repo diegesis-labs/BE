@@ -9,6 +9,7 @@ from fastapi import FastAPI
 
 from app.core.database import database_lifespan
 from app.core.errors import register_error_handlers
+from app.core.origin import OriginCheckMiddleware
 from app.health.router import router as health_router
 
 
@@ -27,6 +28,10 @@ def create_app() -> FastAPI:
     )
     # 모든 에러 응답을 {code, message, detail} 형식으로 바꾼다(docs/API.md 2.3절).
     register_error_handlers(app)
+    # 상태를 바꾸는 모든 요청의 출처를 확인한다(docs/API.md 2.4절, ADR-027). 경로마다 걸지 않고
+    # 앱 전체에 한 번 건다. 등록되지 않은 경로, 공개 경로, 이후에 더할 경로까지 빠짐없이 걸리게 하기
+    # 위해서다. 설정은 요청을 받았을 때 읽는다.
+    app.add_middleware(OriginCheckMiddleware)
     app.include_router(health_router)
     return app
 
