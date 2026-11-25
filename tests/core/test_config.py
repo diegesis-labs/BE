@@ -384,9 +384,11 @@ REJECTED_FRONTEND_URLS = [
     "https://Diegesis.example",
     "https://diegesis.example:443",
     "http://localhost:80",
-    # 앞뒤의 공백
+    # 공백. urlsplit은 호스트 안의 공백을 그대로 두므로 다시 만든 주소와 비교해서는 걸러지지 않는다.
     " https://diegesis.example",
     "https://diegesis.example ",
+    "https://diegesis .example",
+    "https://diegesis.example\t",
 ]
 
 

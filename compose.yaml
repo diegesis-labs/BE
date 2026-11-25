@@ -39,6 +39,15 @@ services:
     environment:
       # 컨테이너 안에서는 db 서비스의 이름으로 닿는다. localhost는 그 컨테이너 자신이다.
       DATABASE_URL: postgresql+asyncpg://diegesis:diegesis@db:5432/diegesis
+      # 마이그레이션도 설정 클래스로 DATABASE_URL을 읽으므로, 서버가 기본값 없이 요구하는 값이
+      # 빠지면 실패한다. 그래서 api와 같은 값을 받는다. 값의 뜻은 docs/CONFIGURATION.md에 있다.
+      #
+      # compose는 레포 최상위의 `.env`를 아래의 `${...}`를 채우는 데에만 읽는다. 그래서 개발자의
+      # `.env`에서는 이 세 값만 컨테이너로 들어가고, 그 안의 DATABASE_URL은 들어가지 않는다.
+      # `.env`가 없으면 기본값으로 뜬다. Google의 값이 비어 있으면 Google 로그인만 실패한다.
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
     depends_on:
       db:
         condition: service_healthy
@@ -47,6 +56,10 @@ services:
     build: .
     environment:
       DATABASE_URL: postgresql+asyncpg://diegesis:diegesis@db:5432/diegesis
+      # migrate와 같은 값이다. 설명은 migrate에 있다.
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
     ports:
       # 8080을 다른 프로그램이 쓰고 있으면 API_PORT로 바꾼다. 이 컴퓨터(127.0.0.1)에만 연다.
       - "127.0.0.1:${API_PORT:-8080}:8080"
