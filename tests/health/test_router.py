@@ -14,12 +14,13 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.config import get_settings
 from app.main import create_app
-from tests.support.settings import UNREACHABLE_DATABASE_URL
+from tests.support.settings import TEST_FRONTEND_URL, UNREACHABLE_DATABASE_URL
 
 
 @pytest.fixture
 def client() -> Iterator[TestClient]:
-    with TestClient(create_app()) as test_client:
+    # 상태를 바꾸는 요청은 프론트엔드와 같은 Origin을 붙여 보낸다(docs/API.md 2.4절).
+    with TestClient(create_app(), headers={"Origin": TEST_FRONTEND_URL}) as test_client:
         yield test_client
 
 
@@ -112,6 +113,8 @@ def test_health_is_documented_in_openapi(client: TestClient) -> None:
     assert allowed == ["ok"]
 
 
+# POST는 출처 확인이 설정을 읽으므로 `app_env`를 쓴다.
+@pytest.mark.usefixtures("app_env")
 def test_post_to_health_returns_method_not_allowed(client: TestClient) -> None:
     response = client.post("/api/health")
 

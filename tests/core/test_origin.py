@@ -136,6 +136,24 @@ def test_origin_check_follows_the_case_table(
 
 
 @pytest.mark.parametrize(
+    "origin",
+    [
+        # Origin이 있으면 Origin만 본다. null이나 빈 값을 없는 것으로 보고 Referer로 넘어가면
+        # 프론트엔드의 Referer가 붙은 요청이 통과해 버린다.
+        pytest.param("null", id="null"),
+        pytest.param("", id="empty"),
+    ],
+)
+def test_present_origin_does_not_fall_back_to_referer(
+    client: TestClient, calls: list[str], origin: str
+) -> None:
+    response = client.post(TEST_ROUTE, headers=headers_of(origin, "http://localhost:5173/books/1"))
+
+    assert_origin_mismatch(response.status_code, response.json())
+    assert calls == []
+
+
+@pytest.mark.parametrize(
     "referer",
     [
         # Referer의 출처도 앞부분이나 포함 여부가 아니라 정확히 비교한다.
