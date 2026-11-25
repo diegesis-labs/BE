@@ -12,7 +12,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.config import Settings, get_settings
-from tests.core.test_frontend_url import ACCEPTED_FRONTEND_URLS, REJECTED_FRONTEND_URLS
+from tests.support.frontend_urls import ACCEPTED_FRONTEND_URLS, REJECTED_FRONTEND_URLS
 from tests.support.settings import (
     SETTING_ENV_NAMES,
     TEST_FRONTEND_URL,
@@ -341,7 +341,7 @@ def test_login_session_ttl_hours_must_be_positive_integer(
 # --- TC-1.2.9: FRONTEND_URL의 조건 (docs/CONFIGURATION.md 3.1절, ADR-027) ----
 #
 # 판정 자체는 app/core/frontend_url.py가 하고 tests/core/test_frontend_url.py가 본다. 여기서는 같은
-# 값들로 설정 클래스가 그 판정을 거치는지를 본다.
+# 값들(tests/support/frontend_urls.py)로 설정 클래스가 그 판정을 거치는지를 본다.
 
 
 @pytest.mark.parametrize("url", ACCEPTED_FRONTEND_URLS)

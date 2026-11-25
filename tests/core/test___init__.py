@@ -4,6 +4,9 @@ app/core/는 기능 폴더(app/auth/, app/health/ 등)와 어댑터(app/adapters
 관문처럼 기능 폴더의 저장소가 필요한 것은 app/core/ports.py에 포트로 선언하고, 구현체는
 app/main.py의 create_app()이 넣는다. core가 기능 폴더를 가져오면 앞으로 더할 기능 폴더들이 모두
 core를 거쳐 auth에 묶이기 때문이다.
+
+이 테스트의 대상은 한 모듈이 아니라 패키지 `app.core` 전체이므로, 그 패키지를 나타내는 파일
+`app/core/__init__.py`의 자리에 둔다(docs/DEVELOPMENT.md 4.2절, 2차 리뷰 ARC-2).
 """
 
 import ast
