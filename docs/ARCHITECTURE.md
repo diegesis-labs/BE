@@ -467,7 +467,7 @@ BE/
 | 데이터베이스와 벡터 검색       | PostgreSQL, pgvector                  | [ADR-002](ADR.md#adr-002-데이터베이스와-벡터-검색)                        |
 | 데이터베이스 접근과 구조 변경 관리 | SQLAlchemy(비동기), Alembic              | [ADR-009](ADR.md#adr-009-데이터베이스-접근-도구와-개발-도구)                  |
 | 통합 테스트용 데이터베이스      | testcontainers                        | [ADR-011](ADR.md#adr-011-통합-테스트용-데이터베이스)                       |
-| 로그인                 | Google OAuth 2.0, 서버에 저장하는 로그인 상태와 쿠키 | [ADR-006](ADR.md#adr-006-로그인과-접근-제한)                           |
+| 로그인                 | Google OAuth 2.0(httpx로 직접 통신), 서버에 저장하는 로그인 상태와 쿠키 | [ADR-006](ADR.md#adr-006-로그인과-접근-제한), [ADR-028](ADR.md#adr-028-google과-통신하는-방법) |
 | 패키지 관리와 코드 품질       | uv, ruff, pyright, pytest, actionlint | [ADR-009](ADR.md#adr-009-데이터베이스-접근-도구와-개발-도구)                  |
 | 배포                  | Docker 컨테이너                           | [ADR-010](ADR.md#adr-010-배포-방식), [INFRA.md](INFRA.md)          |
 | 자동 배포와 이미지 보관       | GitHub Actions, Docker Hub            | [ADR-010](ADR.md#adr-010-배포-방식), [INFRA.md](INFRA.md#37-자동-배포) |
