@@ -118,7 +118,9 @@ def running() -> Iterator[Running]:
     backend = FakeBackend(port=0)
     server = ThreadingHTTPServer((LOOPBACK, 0), make_backend_handler(backend))
     backend.port = server.server_port
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
+    )
     thread.start()
     stand_in = FrontendStandIn(listen_host=LOOPBACK, listen_port=0, backend_url=backend.url)
     stand_in.start()

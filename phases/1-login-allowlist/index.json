@@ -85,7 +85,9 @@
     {
       "step": 10,
       "name": "login-check-proxy",
-      "status": "pending"
+      "status": "completed",
+      "started_at": "2026-11-25T16:06:58+0900",
+      "summary": "scripts/login_check.py에 프론트엔드 대역 서버 FrontendStandIn(listen_host·listen_port·backend_url, start는 ThreadingHTTPServer를 데몬 스레드에서 poll 0.05초로 돌림, stop은 shutdown·server_close·join, port는 server_port이고 뜨기 전이면 RuntimeError, backend_url은 http://호스트:포트만 받고 경로·쿼리·사용자 정보가 붙으면 ValueError)를 표준 라이브러리(http.server, http.client, threading)만으로 두었다. /api로 시작하는 경로(Vite처럼 글자 그대로 startswith)는 http.client로 메서드·경로와 쿼리·본문(Content-Length만큼)·헤더를 그대로 넘기되 Host만 백엔드의 netloc으로 바꾸고 hop-by-hop 헤더와 Connection에 적힌 헤더만 빼며(Origin·Referer·Cookie 포함 나머지는 더하거나 빼지 않음), 응답은 리디렉션을 따라가지 않고 send_response_only로 상태 코드·모든 헤더(Set-Cookie 여럿은 각각)·본문을 그대로 돌려준다(길이 없는 응답엔 Content-Length를 붙임, HEAD는 본문 없음). 요청 본문이 Transfer-Encoding이면 빈 본문으로 넘기지 않고 411, Content-Length가 숫자가 아니면 400, 백엔드에 닿지 못하면 502. 그 밖의 경로는 지금의 주소를 html.escape해 보여 주는 빈 HTML(200)이다. log_message를 막아 결과 처리의 code·state가 담긴 요청 줄을 찍지 않는다. app/을 import하지 않고 main은 없다(실행 방법은 다음 step). 테스트는 tests/infra/test_login_check.py(unit 27개: TC-1.7.1을 요청을 기록하는 가짜 백엔드로, Location이 바깥과 백엔드 자신인 두 경우에서 GET 결과 처리·POST 로그아웃·연속 요청의 Host·Origin·Referer·Cookie·메서드·경로와 쿼리·본문·헤더 전체와 302·Location·Set-Cookie 두 개·본문·요청 수를 확인, /와 /login?error=NOT_ALLOWED가 200 HTML이고 백엔드로 가지 않음, 주소 이스케이프, 502, 411, backend_url 검증, 뜨기 전 port, app import 검출기와 그 검증, check.sh와 워크플로에 login_check가 없음)이며, 반증 조건 다섯 가지를 포함한 틀린 구현 20가지를 잠시 넣어 모두 걸러지는 것을 확인했다"
     },
     {
       "step": 11,
