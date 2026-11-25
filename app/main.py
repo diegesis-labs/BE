@@ -7,6 +7,7 @@
 
 from fastapi import FastAPI
 
+from app.auth.router import router as auth_router
 from app.core.database import database_lifespan
 from app.core.errors import register_error_handlers
 from app.core.origin import OriginCheckMiddleware
@@ -33,6 +34,7 @@ def create_app() -> FastAPI:
     # 위해서다. 설정은 요청을 받았을 때 읽는다.
     app.add_middleware(OriginCheckMiddleware)
     app.include_router(health_router)
+    app.include_router(auth_router)
     return app
 
 
