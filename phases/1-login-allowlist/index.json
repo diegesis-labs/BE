@@ -15,7 +15,8 @@
       "name": "auth-models",
       "status": "completed",
       "started_at": "2026-11-25T14:12:52+0900",
-      "summary": "app/core/models.py에 제약 이름 규칙(pk_/uq_/ix_/fk_/ck_)을 단 공통 Base를, app/auth/models.py에 AllowedEmailModel·UserModel·LoginSessionModel(ARCHITECTURE 6절 그대로, 기본값은 server_default)을 두고, 리비전 8bb879ed9e41(down d98e11845e03, downgrade는 vector를 남김)을 만들고 env.py의 target_metadata를 Base.metadata로 바꿨으며, conftest에 clean_db(시작할 때 TRUNCATE, 동기·비동기 겸용)와 테스트마다 새로 만드는 db_engine·db_session_factory를 더했다. TC-1.1.1~1.1.5는 위반한 제약의 이름까지 확인하고, 모델과 마이그레이션의 비교(command.check)는 tests/core/test_database.py에 두었으며, TC-0.2.3은 '-1' 대신 vector 리비전을 기준으로 되돌리게 고쳤다. 제약 이름 규칙은 ARCHITECTURE 6절에 없는 구현 세부다"
+      "summary": "app/core/models.py에 제약 이름 규칙(pk_/uq_/ix_/fk_/ck_)을 단 공통 Base를, app/auth/models.py에 AllowedEmailModel·UserModel·LoginSessionModel(ARCHITECTURE 6절 그대로, 기본값은 server_default)을 두고, 리비전 8bb879ed9e41(down d98e11845e03, downgrade는 vector를 남김)을 만들고 env.py의 target_metadata를 Base.metadata로 바꿨으며, conftest에 clean_db(시작할 때 TRUNCATE, 동기·비동기 겸용)와 테스트마다 새로 만드는 db_engine·db_session_factory를 더했다. TC-1.1.1~1.1.5는 위반한 제약의 이름까지 확인하고, 모델과 마이그레이션의 비교(command.check)는 tests/core/test_database.py에 두었으며, TC-0.2.3은 '-1' 대신 vector 리비전을 기준으로 되돌리게 고쳤다. 제약 이름 규칙은 ARCHITECTURE 6절에 없는 구현 세부다",
+      "completed_at": "2026-11-25T14:25:43+0900"
     },
     {
       "step": 2,
