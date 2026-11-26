@@ -6,7 +6,6 @@
 
 import socket
 from collections.abc import Iterator
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,14 +14,13 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.config import get_settings
 from app.main import create_app
-
-# 닿을 수 없는 데이터베이스 주소. 포트 1에는 PostgreSQL이 없으므로 접속하면 곧바로 실패한다.
-UNREACHABLE_DATABASE_URL = "postgresql+asyncpg://u:p@127.0.0.1:1/x"
+from tests.support.settings import TEST_FRONTEND_URL, UNREACHABLE_DATABASE_URL
 
 
 @pytest.fixture
 def client() -> Iterator[TestClient]:
-    with TestClient(create_app()) as test_client:
+    # 상태를 바꾸는 요청은 프론트엔드와 같은 Origin을 붙여 보낸다(docs/API.md 2.4절).
+    with TestClient(create_app(), headers={"Origin": TEST_FRONTEND_URL}) as test_client:
         yield test_client
 
 
@@ -45,20 +43,6 @@ def test_health_is_not_served_without_api_prefix(client: TestClient) -> None:
 
 
 # --- TC-0.4.2 ---------------------------------------------------------------
-
-
-@pytest.fixture
-def unreachable_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """설정의 DATABASE_URL이 닿을 수 없는 주소를 가리키게 한다.
-
-    작업 경로를 빈 임시 폴더로 옮겨서 개발자의 `.env`(PORT, LOG_LEVEL 등)를 읽지 않게 한다.
-    """
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("DATABASE_URL", UNREACHABLE_DATABASE_URL)
-    monkeypatch.delenv("database_url", raising=False)
-    get_settings.cache_clear()
-    yield
-    get_settings.cache_clear()
 
 
 def record_database_access(monkeypatch: pytest.MonkeyPatch) -> list[str]:
@@ -86,10 +70,9 @@ def record_database_access(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return calls
 
 
-def test_health_does_not_touch_the_database(
-    unreachable_database: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # 전제: 앱이 설정을 읽는다면 닿을 수 없는 주소를 읽게 된다.
+def test_health_does_not_touch_the_database(app_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    # 전제: 앱이 설정을 읽는다면 닿을 수 없는 주소를 읽게 된다. app_env는 작업 경로를 빈 임시 폴더로
+    # 옮기고 DATABASE_URL을 닿을 수 없는 주소로 둔다(tests/conftest.py).
     assert get_settings().database_url == UNREACHABLE_DATABASE_URL
 
     # 예외를 테스트로 다시 던지지 않고, 서버가 보낸 응답을 그대로 받아서 비교한다.
@@ -130,6 +113,8 @@ def test_health_is_documented_in_openapi(client: TestClient) -> None:
     assert allowed == ["ok"]
 
 
+# POST는 출처 확인이 설정을 읽으므로 `app_env`를 쓴다.
+@pytest.mark.usefixtures("app_env")
 def test_post_to_health_returns_method_not_allowed(client: TestClient) -> None:
     response = client.post("/api/health")
 

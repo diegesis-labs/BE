@@ -81,6 +81,26 @@ def client() -> Iterator[TestClient]:
         yield test_client
 
 
+def test_gate_of_created_app_finds_logins_with_auth_repository() -> None:
+    """관문이 쓰는 LoginLookup 포트의 구현체는 create_app()이 넣는 AuthRepository다(ADR-029).
+
+    관문의 단위 테스트는 이 자리를 가짜로 바꾸므로, 실제 앱의 조립은 여기서 본다.
+    """
+    from typing import cast
+
+    from fastapi import Request
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.auth.repository import AuthRepository
+    from app.core.gate import get_login_lookup
+    from app.main import create_app
+
+    session = cast(AsyncSession, object())
+    lookup = get_login_lookup(Request({"type": "http", "app": create_app()}), session)
+
+    assert isinstance(lookup, AuthRepository)
+
+
 def test_openapi_document_is_served_under_api(client: TestClient) -> None:
     response = client.get("/api/openapi.json")
 

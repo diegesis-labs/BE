@@ -39,32 +39,34 @@ flowchart LR
 cp .env.example .env
 ```
 
-다만 docker compose로 서버와 데이터베이스를 함께 띄울 때에는 `.env`가 필요하지 않습니다. compose 파일이 필요한 값을 컨테이너에 직접 넣어 주기 때문입니다. `.env`는 서버를 compose 밖에서 직접 실행할 때 씁니다.
+docker compose로 서버와 데이터베이스를 함께 띄울 때에는 `.env`의 값 가운데 `FRONTEND_URL`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` 세 값만 서버에 들어갑니다. compose는 `.env`를 `compose.yaml`에 적힌 `${...}`를 채우는 데에만 읽고, `compose.yaml`은 서버의 설정값 가운데 이 세 값만 그렇게 받기 때문입니다. `DATABASE_URL` 같은 나머지 값은 `.env`에 있더라도 서버에 들어가지 않습니다. 개발자의 `.env`에 든 `DATABASE_URL`은 compose 밖에서 실행하는 서버를 위해 `localhost`를 가리키는데, 컨테이너 안에서 `localhost`는 그 컨테이너 자신입니다. 그래서 이 주소가 `compose.yaml`이 넣어 주는 컨테이너 안의 주소(`db` 서비스)를 덮어쓰면 서버가 데이터베이스에 닿지 못합니다.
+
+`.env`가 없거나 세 값이 비어 있어도 서버는 뜹니다. 이때 `FRONTEND_URL`은 `http://localhost:5173`이 되고, Google의 두 값은 비어 있으므로 Google 로그인만 되지 않습니다. `.env`의 나머지 값은 서버를 compose 밖에서 직접 실행할 때 쓰입니다.
 
 ## 3. 설정값 목록
 
-"필수"라고 적힌 값은 기본값이 없어서, 채우지 않으면 서버가 시작되지 않습니다.
+"필수"라고 적힌 값은 기본값이 없어서, 그 이름의 변수가 아예 없으면 서버가 시작되지 않습니다. 빈 값을 받는지는 값마다 적습니다.
 
 ### 3.1 서버
 
 | 이름 | 뜻 | 기본값 | 예시 |
 | --- | --- | --- | --- |
 | `PORT` | 서버가 요청을 받는 포트입니다. 프론트엔드의 개발 서버가 `8080`으로 요청을 넘기도록 설정되어 있습니다. | `8080` | `8080` |
-| `FRONTEND_URL` | 프론트엔드의 주소입니다. 로그인을 마친 사용자를 이 주소로 돌려보냅니다. 그리고 이 값 뒤에 `/api/auth/google/callback`을 붙여 Google이 로그인 결과를 돌려보낼 주소를 만듭니다. 그래서 Google 콘솔에 등록하는 돌아올 주소도 이 값을 따릅니다([INFRA.md 3.5절](INFRA.md#35-google-로그인-설정)). 이 값은 쿠키와 요청의 확인에도 쓰입니다. 이 값이 `https`로 시작하면 쿠키에 `Secure`를 붙이고, 상태를 바꾸는 요청은 `Origin`이 이 값과 같아야 받아들입니다([API.md 2.4절](API.md#24-상태를-바꾸는-요청의-출처-확인)). 스킴, 호스트, 포트만 적고 끝에 `/`를 붙이지 않으며, `http`는 호스트가 `localhost`나 `127.0.0.1`일 때만 쓸 수 있습니다. 이 조건에 맞지 않으면 서버가 시작되지 않습니다([ADR-027](ADR.md#adr-027-로그인-흐름과-로그인-상태의-보안-보강)). 프론트엔드와 백엔드가 같은 주소를 쓰므로 CORS는 설정하지 않습니다. | 필수 | `http://localhost:5173` |
+| `FRONTEND_URL` | 프론트엔드의 주소입니다. 로그인을 마친 사용자를 이 주소로 돌려보냅니다. 그리고 이 값 뒤에 `/api/auth/google/callback`을 붙여 Google이 로그인 결과를 돌려보낼 주소를 만듭니다. 그래서 Google 콘솔에 등록하는 돌아올 주소도 이 값을 따릅니다([INFRA.md 3.5절](INFRA.md#35-google-로그인-설정)). 이 값은 쿠키와 요청의 확인에도 쓰입니다. 이 값이 `https`로 시작하면 쿠키에 `Secure`를 붙이고, 상태를 바꾸는 요청은 `Origin`이 이 값과 같아야 받아들입니다([API.md 2.4절](API.md#24-상태를-바꾸는-요청의-출처-확인)). 스킴, 호스트, 포트만 적고 끝에 `/`를 붙이지 않으며, `http`는 호스트가 `localhost`나 `127.0.0.1`일 때만 쓸 수 있습니다. 출처 확인이 브라우저가 보낸 `Origin`과 이 값을 글자 그대로 비교하므로, 브라우저가 `Origin`을 적는 모양대로 스킴과 호스트를 소문자로 적고 기본 포트(`http`의 80, `https`의 443)는 적지 않습니다. 이 조건에 맞지 않으면 서버가 시작되지 않습니다([ADR-027](ADR.md#adr-027-로그인-흐름과-로그인-상태의-보안-보강)). 프론트엔드와 백엔드가 같은 주소를 쓰므로 CORS는 설정하지 않습니다. | 필수 | `http://localhost:5173` |
 | `LOG_LEVEL` | 로그를 얼마나 자세히 남길지 정합니다. `DEBUG`, `INFO`, `WARNING`, `ERROR` 가운데 하나입니다. | `INFO` | `DEBUG` |
 
 ### 3.2 데이터베이스
 
 | 이름 | 뜻 | 기본값 | 예시 |
 | --- | --- | --- | --- |
-| `DATABASE_URL` | PostgreSQL에 접속하는 주소입니다. 사용자 이름, 비밀번호, 주소, 데이터베이스 이름이 들어갑니다. | 필수 | `postgresql+asyncpg://diegesis:diegesis@localhost:5432/diegesis` |
+| `DATABASE_URL` | PostgreSQL에 접속하는 주소입니다. 사용자 이름, 비밀번호, 주소, 데이터베이스 이름이 들어갑니다. 빈 값은 받지 않으며, 빈 값이면 서버가 시작되지 않습니다. | 필수 | `postgresql+asyncpg://diegesis:diegesis@localhost:5432/diegesis` |
 
 ### 3.3 로그인
 
 | 이름 | 뜻 | 기본값 | 예시 |
 | --- | --- | --- | --- |
-| `GOOGLE_CLIENT_ID` | Google 로그인을 위해 Google Cloud 콘솔에서 발급받은 클라이언트 ID입니다. | 필수 | `1234567890-abc.apps.googleusercontent.com` |
-| `GOOGLE_CLIENT_SECRET` | 위 클라이언트 ID와 짝을 이루는 비밀값입니다. | 필수 | (비밀값이므로 예시를 적지 않습니다) |
+| `GOOGLE_CLIENT_ID` | Google 로그인을 위해 Google Cloud 콘솔에서 발급받은 클라이언트 ID입니다. 빈 값도 받으며, 빈 값으로 뜬 서버는 Google 로그인만 되지 않습니다(2절). | 필수 | `1234567890-abc.apps.googleusercontent.com` |
+| `GOOGLE_CLIENT_SECRET` | 위 클라이언트 ID와 짝을 이루는 비밀값입니다. 빈 값도 받으며, 빈 값으로 뜬 서버는 Google 로그인만 되지 않습니다(2절). | 필수 | (비밀값이므로 예시를 적지 않습니다) |
 | `LOGIN_SESSION_TTL_HOURS` | 로그인 상태가 유지되는 시간입니다. 로그인한 때부터 세며, 로그인 상태를 쓰는 동안에도 늘어나지 않습니다. 이 시간이 지나면 다시 로그인해야 합니다. | `336` (14일) | `720` |
 | `LOGIN_COOKIE_NAME` | 로그인 상태를 식별하는 쿠키의 이름입니다. | `diegesis_session` | `diegesis_session` |
 

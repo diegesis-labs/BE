@@ -1,9 +1,10 @@
-"""`compose.yaml`의 테스트 (TC-0.5.4).
+"""`compose.yaml`의 테스트 (TC-0.5.4, 그리고 E1 T1.7.3의 로그인 설정값).
 
 데이터베이스 서비스(`db`)의 이미지는 tests/support/test_postgres.py와 통합 테스트가 다룬다.
 이 파일은 마이그레이션 서비스(`migrate`)와 서버 서비스(`api`)를 본다.
 """
 
+import re
 import shlex
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_FILE = REPO_ROOT / "compose.yaml"
 
 SERVER_SERVICES = ["migrate", "api"]
+
+# 서버의 설정 클래스가 기본값 없이 요구하는 값 가운데 compose가 개발자의 `.env`에서 넘기는 것.
+LOGIN_SETTING_NAMES = ["FRONTEND_URL", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"]
+
+# compose의 변수 치환 `${NAME:-기본값}`. 변수가 없거나 비어 있으면 기본값을 쓴다.
+SUBSTITUTION = re.compile(r"\$\{(?P<name>[A-Z_][A-Z0-9_]*):-(?P<default>[^}]*)\}")
 
 
 def compose() -> dict[str, Any]:
@@ -91,6 +98,52 @@ def test_api_and_migrate_share_the_same_database_url() -> None:
     # (docs/DECISIONS.md의 D-39). 그 확인은 두 서비스의 주소가 같을 때에만 api에도 성립한다.
     # api의 주소만 틀리면 스모크는 초록이므로, 여기서 걸러야 한다.
     assert environment("api").get("DATABASE_URL") == environment("migrate").get("DATABASE_URL")
+
+
+# --- E1 T1.7.3: 로그인 설정값 ------------------------------------------------
+# migrations/env.py도 설정 클래스로 DATABASE_URL을 읽으므로, 기본값이 없는 값이 빠지면 api만이
+# 아니라 migrate도 실패한다. 그래서 두 서비스가 같은 값을 받는다. 서비스에 env_file이 없다는 것은
+# 위의 test_no_service_has_platform_or_env_file이 확인한다. compose는 레포 최상위의 `.env`를 변수
+# 치환에만 읽으므로, 아래 세 값만 컨테이너로 들어가고 `.env`의 DATABASE_URL은 들어가지 않는다.
+
+
+def substitution(value: str) -> tuple[str, str]:
+    """`${NAME:-기본값}` 하나로만 이루어진 값에서 변수의 이름과 기본값을 꺼낸다."""
+    found = SUBSTITUTION.fullmatch(value)
+    assert found, f"`${{이름:-기본값}}` 형식이 아니다: {value!r}"
+    return found["name"], found["default"]
+
+
+@pytest.mark.parametrize("name", SERVER_SERVICES)
+def test_server_services_get_login_settings_from_same_named_variables(name: str) -> None:
+    env = environment(name)
+    for setting in LOGIN_SETTING_NAMES:
+        assert setting in env, f"{name}의 environment에 {setting}이 없다"
+        # 값을 파일에 적지 않고 같은 이름의 변수(개발자의 `.env`나 환경변수)에서 받는다.
+        variable, _ = substitution(env[setting])
+        assert variable == setting, f"{name}의 {setting}이 다른 변수 {variable}을 읽는다"
+
+
+def test_api_and_migrate_share_the_same_login_settings() -> None:
+    api = {setting: environment("api").get(setting) for setting in LOGIN_SETTING_NAMES}
+    migrate = {setting: environment("migrate").get(setting) for setting in LOGIN_SETTING_NAMES}
+    assert api == migrate
+
+
+@pytest.mark.parametrize("name", SERVER_SERVICES)
+def test_frontend_url_defaults_to_local_frontend(name: str) -> None:
+    # `.env`가 없어도(스모크는 --env-file /dev/null로 돈다) 서버가 검증을 통과하는 값으로 뜬다.
+    _, default = substitution(environment(name)["FRONTEND_URL"])
+    assert default == "http://localhost:5173"
+
+
+@pytest.mark.parametrize("name", SERVER_SERVICES)
+@pytest.mark.parametrize("setting", ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"])
+def test_google_values_default_to_empty(name: str, setting: str) -> None:
+    # CI에는 Google 클라이언트의 값이 없다. 기본값이 비어 있어야 그 값 없이도 서버와 마이그레이션이
+    # 뜬다(E1 S1.7). 그리고 실제 값이 이 파일에 적히면 안 된다.
+    _, default = substitution(environment(name)[setting])
+    assert default == ""
 
 
 # --- TC-0.5.4: 시작 순서 ----------------------------------------------------

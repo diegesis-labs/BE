@@ -1,0 +1,214 @@
+# Epic 1 — 사람이 확인하는 점검표
+
+> **에이전트에게 시키지 마라.** 여기 있는 것은 사람이 직접 보고 체크한다.
+> 근거는 `docs/backlog/epic-1/testcase.md`의 `manual` 항목(TC-1.7.3, TC-1.7.4)이다.
+> 전부 체크되기 전까지 `execute.py`는 종료 코드 5로 끝난다 — 정상이다.
+>
+> 두 항목은 점검 스크립트 한 번의 실행으로 함께 확인한다. 스크립트가 점검 1(계정 A)을 끝낸 뒤 점검 2(계정 B)를 이어서 한다.
+
+## 점검을 준비하는 순서
+
+이 worktree의 최상위 폴더에서 아래 순서대로 한다. 계정 A는 허용 목록에 넣을 실제 Google 계정이고, 계정 B는 허용 목록에 넣지 않을 다른 실제 Google 계정이다. 명령의 `<A>`, `<B>`를 두 계정의 이메일로 바꾼다.
+
+**1. Google OAuth 클라이언트.** 승인된 리디렉션 URI에 `http://localhost:5173/api/auth/google/callback`이 등록된 클라이언트가 있어야 한다(`docs/INFRA.md` 3.5절). 어느 계정으로 만든 클라이언트든 이 주소만 등록되어 있으면 된다.
+
+**2. `.env`.** 견본을 복사하고 `GOOGLE_CLIENT_ID`와 `GOOGLE_CLIENT_SECRET`을 채운다. `FRONTEND_URL`은 `http://localhost:5173` 그대로 둔다. `.env`는 커밋하지 않는다.
+
+```bash
+cp .env.example .env
+```
+
+**3. 서버.** compose로 데이터베이스, 마이그레이션, 서버를 띄운다. `.env`를 고친 뒤에는 다시 띄워야 서버가 새 값을 받는다.
+
+```bash
+docker compose up --build -d --wait
+```
+
+**4. 허용 목록.** 계정 A를 `user`로 넣는다. 계정 B는 넣지 않는다.
+
+```bash
+docker compose exec db psql -U diegesis -d diegesis -c "INSERT INTO allowed_emails (email, role) VALUES (lower('<A>'), 'user') ON CONFLICT (email) DO UPDATE SET role = EXCLUDED.role;"
+```
+
+**5. 점검 스크립트.** 프론트엔드의 개발 서버가 5173 포트를 쓰고 있으면 끄고 실행한다. 점검 전 상태가 아래 표의 "로그인 전"과 다르면 스크립트는 점검을 시작하지 않고 상태를 맞추는 SQL을 보여 준 뒤 끝난다. 그 SQL을 위 4번처럼 실행하고 다시 돌린다. 브라우저나 Playwright는 따로 설치하지 않는다.
+
+```bash
+uv run python scripts/login_check.py --allowed-email <A> --denied-email <B>
+```
+
+**6. 게스트 창에서 버튼 누르기.** 스크립트는 "대역 서버가 http://localhost:5173에서 받고 있다."를 출력한 뒤, `>>>`로 시작하는 줄로 할 일을 하나씩 알려 준다. 할 일의 요청이 대역 서버를 지나가면 그 시점의 상태를 출력하고 다음 할 일을 알려 준다. 대역 서버의 화면에는 [Google로 로그인], [내 정보 확인], [로그아웃]의 세 버튼이 있다.
+
+평소 쓰는 브라우저의 평소 창이 아니라 게스트 창에서 한다. Chrome은 오른쪽 위의 프로필 메뉴에서 '게스트'를 고른다. 이유는 점검마다 쿠키가 없는 브라우저에서 시작해야 하고, 점검에 쓴 Google 계정의 로그인이 평소의 브라우저 프로필에 남지 않아야 하기 때문이다(`docs/ADR.md`의 ADR-031).
+
+| 점검 | 할 일 |
+| --- | --- |
+| 점검 1 (계정 A) | 새 게스트 창에서 `http://localhost:5173/`을 열고 [내 정보 확인]을 누른다. |
+| | [Google로 로그인]을 누르고 Google 화면에서 계정 A를 고른다. |
+| | 첫 화면으로 돌아오면 [내 정보 확인]을 누른다. |
+| | [로그아웃]을 누른다. 화면이 로그아웃한 뒤 내 정보를 한 번 더 확인한다. |
+| 점검 2 (계정 B) | 열려 있는 게스트 창을 모두 닫고, 새 게스트 창에서 `http://localhost:5173/`을 열고 [내 정보 확인]을 누른다. |
+| | [Google로 로그인]을 누르고 Google 화면에서 계정 B를 고른다. |
+| | `/login?error=NOT_ALLOWED`로 돌아오면 [내 정보 확인]을 누른다. |
+
+비밀번호를 물으면 게스트 창에서 직접 넣는다. 스크립트는 Google 화면에 아무것도 입력하지 않는다.
+
+스크립트는 할 일마다 그 요청이 대역 서버를 지나가기를 최대 5분 기다린다. 그 안에 지나가지 않으면 무엇을 기다렸는지(그때까지 표와 다른 것이 있었으면 그것도) 보여 주고 끝난다. 그때에는 게스트 창을 모두 닫고 처음부터 다시 돌린다. 점검 1의 로그인을 마친 뒤였다면 계정 A의 행이 남아 있으므로, 스크립트가 보여 주는 SQL을 위 4번처럼 실행한 뒤 다시 돌린다.
+
+점검이 끝나면 게스트 창을 모두 닫고 서버를 내린다. 데이터베이스의 데이터는 남는다.
+
+```bash
+docker compose down
+```
+
+## 시점마다 기대하는 상태
+
+아래 두 표는 `docs/backlog/epic-1/testcase.md`의 "로컬 로그인 점검의 테이블 상태"를 그대로 옮긴 것이다. 스크립트가 출력한 시점마다의 실제 상태를 이 표와 칸마다 대조한다. 스크립트는 표와 다른 것이 있으면 끝에 모아 보여 주고 0이 아닌 코드로 끝나지만, 출력도 직접 읽고 대조한다. 특히 `display_name`이 A의 Google 이름인지("로그인 후"의 `users`, "로그아웃 전"의 `GET /api/me`)는 스크립트가 알 수 없어 판정하지 않으므로, 출력의 `display_name`을 직접 대조한다.
+
+계정 A는 허용 목록에 `user`로 넣은 Google 계정이고, 계정 B는 허용 목록에 없는 Google 계정이다. 표의 행은 두 계정의 이메일에 관한 것만 본다. 다만 점검 2의 `login_sessions`는 전체 행의 수도 본다. "그대로"는 바로 앞 시점과 같다는 뜻이다. 스크립트는 로그인 후의 상태를 출력한 다음 [내 정보 확인]을 안내해 `GET /api/me`가 한 번 지나가게 하고, 로그아웃 전의 상태를 출력한 다음 로그아웃을 안내한다. 그래서 두 시점 사이에는 `GET /api/me`를 한 번 부른 것만 있으며, 두 시점의 테이블은 같아야 한다.
+
+표의 "브라우저" 칸은 대역 서버를 지난 요청과 응답으로 본다(ADR-031). 쿠키와 그 속성은 백엔드가 보낸 `Set-Cookie`로 세고, 게스트 창이 다음 화면 이동이나 `/api` 요청에 붙인 `Cookie`(출력의 "보낸 쿠키")가 그 셈과 다르면 표와 다른 것으로 본다. 그 밖의 요청(다른 창의 탭이 보낸 아이콘 요청 같은 것)에 붙은 `Cookie`는 대조하지 않는다(ADR-032).
+
+**점검 1: 허용된 계정 A의 로그인과 로그아웃 (TC-1.7.3)**
+
+| 시점 | `allowed_emails` | `users` | `login_sessions` | 브라우저 |
+| --- | --- | --- | --- | --- |
+| 로그인 전 | A의 행이 하나 있고, `role`은 `user`입니다. | A의 행이 없습니다. | A의 행이 없습니다. | 쿠키가 없습니다. `GET /api/me`는 `401`입니다. |
+| 로그인 후 | 그대로입니다. | A의 행이 하나 생깁니다. `email`은 소문자이고, `google_sub`는 비어 있지 않으며, `display_name`은 A의 Google 이름이고, `created_at`은 방금입니다. | A의 행이 하나 생깁니다. `token_hash`는 쿠키 값의 SHA-256과 같습니다. `expires_at`은 로그인한 시각에 `LOGIN_SESSION_TTL_HOURS`(기본 336시간)를 더한 시각과 1분 안에서 같습니다. | 주소가 `FRONTEND_URL`의 `/`입니다. `diegesis_session` 쿠키에 `HttpOnly`, `SameSite=Lax`, `Path=/`가 붙고 `Secure`는 붙지 않습니다. `diegesis_oauth_state` 쿠키는 없습니다. |
+| 로그아웃 전 | 그대로입니다. | 그대로입니다. | 그대로입니다. `GET /api/me`를 불러도 행이 늘거나 바뀌지 않습니다. | `GET /api/me`가 `200`이고, 본문의 `email`은 A, `role`은 `user`, `display_name`은 A의 Google 이름입니다. |
+| 로그아웃 후 | 그대로입니다. | 그대로입니다. 로그아웃은 `users` 행을 지우지 않습니다. | A의 행이 없습니다. | 로그아웃의 응답이 `204`입니다. 이것은 대역 서버를 거친 요청이 출처 확인을 통과했다는 뜻이기도 합니다. `diegesis_session` 쿠키가 없고, `GET /api/me`는 `401`입니다. |
+
+**점검 2: 허용 목록 밖 계정 B의 로그인 시도 (TC-1.7.4)**
+
+B에게는 로그인 상태가 생기지 않으므로 로그아웃 전후는 보지 않습니다.
+
+| 시점 | `allowed_emails` | `users` | `login_sessions` | 브라우저 |
+| --- | --- | --- | --- | --- |
+| 로그인 전 | B의 행이 없습니다. | B의 행이 없습니다. | 전체 행의 수를 기록합니다. | 쿠키가 없습니다. |
+| 로그인 시도 후 | 그대로입니다. B가 들어가지 않습니다. | 그대로입니다. 허용 목록에 없는 계정의 행을 만들지 않습니다. | 전체 행의 수가 로그인 전과 같습니다. | 주소가 `FRONTEND_URL`의 `/login?error=NOT_ALLOWED`입니다. `diegesis_session`과 `diegesis_oauth_state` 쿠키가 없고, `GET /api/me`는 `401`입니다. |
+
+## 실제 Google 계정으로 하는 로그인과 로그아웃
+
+- [x] 점검 1(TC-1.7.3): 계정 A로 로그인하고 로그아웃했을 때, 스크립트가 출력한 네 시점(로그인 전, 로그인 후, 로그아웃 전, 로그아웃 후)의 테이블과 브라우저의 상태가 위 "점검 1"의 표와 칸마다 같다.
+  - 테스트로 덮을 수 없는 이유: 실제 Google 계정과 Google 화면의 입력은 사람만 다룰 수 있고, 검사의 테스트는 실제 Google에 요청하지 않는다(ADR-026, ADR-031).
+  - 실행 명령: `uv run python scripts/login_check.py --allowed-email <A> --denied-email <B>`
+  - 관찰한 값(체크한 날짜와 함께 적는다. 이메일, 쿠키 값, `token_hash`의 값은 적지 않는다):
+    - 체크한 날짜: 2026-11-26
+    - 가린 값: 스크립트의 출력을 옮기면서 아래 값을 바꿔 적었다. 이메일은 `<A>`와 `<B>`로 바꿨다. 계정 A의 `users.id`는 `<id-A>`로 바꿨으며, `users.id`, `login_sessions.user_id`, `GET /api/me`의 `id`는 모두 같은 값이었다. `google_sub`는 `<google_sub-A>`로 바꿨으며, 비어 있지 않은 21자리 숫자였다. `display_name`은 `<A의 Google 이름>`으로 바꿨다.
+    - 로그인 전:
+      ```text
+      === 점검 1 · 로그인 전
+      allowed_emails
+        A <A>: <A> role=user created_at=2026-11-25T13:47:21+00:00
+        B <B>: 행 없음
+      users
+        A <A>: 행 없음
+        B <B>: 행 없음
+      login_sessions (전체 0행)
+        A <A>: 행 없음
+        B <B>: 행 없음
+      브라우저
+        주소: http://localhost:5173/login?error=LOGIN_FAILED
+        쿠키: 없음
+        보낸 쿠키(GET /api/me): 없음
+        GET /api/me: 401 {"code": "NOT_AUTHENTICATED", "message": "로그인이 필요합니다."}
+      ```
+    - 로그인 후:
+      ```text
+      === 점검 1 · 로그인 후
+      allowed_emails
+        A <A>: <A> role=user created_at=2026-11-25T13:47:21+00:00
+        B <B>: 행 없음
+      users
+        A <A>: <A> id=<id-A> google_sub=<google_sub-A> display_name='<A의 Google 이름>' created_at=2026-11-26T00:07:07+00:00
+        B <B>: 행 없음
+      login_sessions (전체 1행)
+        A <A> user_id=<id-A> created_at=2026-11-26T00:07:07+00:00 expires_at=2026-12-10T00:07:07+00:00, token_hash는 diegesis_session 쿠키 값의 SHA-256과 같다
+        B <B>: 행 없음
+      브라우저
+        주소: http://localhost:5173/
+        쿠키:
+          diegesis_session: Path=/, SameSite=Lax, HttpOnly, Secure 없음
+        보낸 쿠키(GET /): diegesis_session
+      ```
+    - 로그아웃 전:
+      ```text
+      === 점검 1 · 로그아웃 전
+      allowed_emails
+        A <A>: <A> role=user created_at=2026-11-25T13:47:21+00:00
+        B <B>: 행 없음
+      users
+        A <A>: <A> id=<id-A> google_sub=<google_sub-A> display_name='<A의 Google 이름>' created_at=2026-11-26T00:07:07+00:00
+        B <B>: 행 없음
+      login_sessions (전체 1행)
+        A <A> user_id=<id-A> created_at=2026-11-26T00:07:07+00:00 expires_at=2026-12-10T00:07:07+00:00, token_hash는 diegesis_session 쿠키 값의 SHA-256과 같다
+        B <B>: 행 없음
+      브라우저
+        주소: http://localhost:5173/
+        쿠키:
+          diegesis_session: Path=/, SameSite=Lax, HttpOnly, Secure 없음
+        보낸 쿠키(GET /api/me): diegesis_session
+        GET /api/me: 200 {"id": "<id-A>", "email": "<A>", "display_name": "<A의 Google 이름>", "role": "user"}
+      ```
+    - 로그아웃 후:
+      ```text
+      === 점검 1 · 로그아웃 후
+      allowed_emails
+        A <A>: <A> role=user created_at=2026-11-25T13:47:21+00:00
+        B <B>: 행 없음
+      users
+        A <A>: <A> id=<id-A> google_sub=<google_sub-A> display_name='<A의 Google 이름>' created_at=2026-11-26T00:07:07+00:00
+        B <B>: 행 없음
+      login_sessions (전체 0행)
+        A <A>: 행 없음
+        B <B>: 행 없음
+      브라우저
+        주소: http://localhost:5173/
+        쿠키: 없음
+        보낸 쿠키(GET /api/me): 없음
+        GET /api/me: 401 {"code": "NOT_AUTHENTICATED", "message": "로그인이 필요합니다."}
+        POST /api/auth/logout: 204
+      ```
+    - `display_name`: 로그인 후의 `users`와 로그아웃 전의 `GET /api/me`에서 모두 계정 A의 Google 이름과 같았다.
+    - 표와 다른 점(없으면 "없음"): 없음
+- [x] 점검 2(TC-1.7.4): 계정 B로 로그인을 시도했을 때, 스크립트가 출력한 두 시점(로그인 전, 로그인 시도 후)의 테이블과 브라우저의 상태가 위 "점검 2"의 표와 칸마다 같다.
+  - 테스트로 덮을 수 없는 이유: 위와 같다. 허용 목록 밖의 실제 Google 계정이 Google 로그인을 마치고 돌아오는 경로는 실제 계정으로만 지나간다.
+  - 실행 명령: 점검 1과 같은 실행에서 이어진다.
+  - 관찰한 값(체크한 날짜와 함께 적는다):
+    - 체크한 날짜: 2026-11-26. 점검 1과 같은 실행이며, 가린 값도 점검 1과 같다.
+    - 로그인 전(`login_sessions`의 전체 행 수 포함):
+      ```text
+      === 점검 2 · 로그인 전
+      allowed_emails
+        A <A>: <A> role=user created_at=2026-11-25T13:47:21+00:00
+        B <B>: 행 없음
+      users
+        A <A>: <A> id=<id-A> google_sub=<google_sub-A> display_name='<A의 Google 이름>' created_at=2026-11-26T00:07:07+00:00
+        B <B>: 행 없음
+      login_sessions (전체 0행)
+        A <A>: 행 없음
+        B <B>: 행 없음
+      브라우저
+        주소: http://localhost:5173/
+        쿠키: 없음
+        보낸 쿠키(GET /api/me): 없음
+        GET /api/me: 401 {"code": "NOT_AUTHENTICATED", "message": "로그인이 필요합니다."}
+      ```
+    - 로그인 시도 후:
+      ```text
+      === 점검 2 · 로그인 시도 후
+      allowed_emails
+        A <A>: <A> role=user created_at=2026-11-25T13:47:21+00:00
+        B <B>: 행 없음
+      users
+        A <A>: <A> id=<id-A> google_sub=<google_sub-A> display_name='<A의 Google 이름>' created_at=2026-11-26T00:07:07+00:00
+        B <B>: 행 없음
+      login_sessions (전체 0행)
+        A <A>: 행 없음
+        B <B>: 행 없음
+      브라우저
+        주소: http://localhost:5173/login?error=NOT_ALLOWED
+        쿠키: 없음
+        보낸 쿠키(GET /api/me): 없음
+        GET /api/me: 401 {"code": "NOT_AUTHENTICATED", "message": "로그인이 필요합니다."}
+      ```
+    - 표와 다른 점(없으면 "없음"): 없음

@@ -19,6 +19,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.errors import AppError
 from app.main import create_app
+from tests.support.settings import TEST_FRONTEND_URL
 
 # 처리되지 않은 예외의 메시지에 넣는 비밀값. 응답 어디에도 나오면 안 된다.
 SECRET_DSN = "postgresql://user:secret-pw@db/x"
@@ -84,16 +85,21 @@ def build_app() -> FastAPI:
     return app
 
 
+# 상태를 바꾸는 요청은 프론트엔드와 같은 Origin을 붙여 보낸다(docs/API.md 2.4절). 그런 요청을
+# 보내는 테스트는 출처 확인이 설정을 읽으므로 `app_env`를 쓴다.
+SAME_ORIGIN = {"Origin": TEST_FRONTEND_URL}
+
+
 @pytest.fixture
 def client() -> Iterator[TestClient]:
-    with TestClient(build_app()) as test_client:
+    with TestClient(build_app(), headers=SAME_ORIGIN) as test_client:
         yield test_client
 
 
 @pytest.fixture
 def server_error_client() -> Iterator[TestClient]:
     """처리되지 않은 예외를 테스트로 다시 던지지 않고, 서버가 보낸 응답을 그대로 돌려준다."""
-    with TestClient(build_app(), raise_server_exceptions=False) as test_client:
+    with TestClient(build_app(), raise_server_exceptions=False, headers=SAME_ORIGIN) as test_client:
         yield test_client
 
 
@@ -132,6 +138,7 @@ def test_invalid_query_value_returns_validation_error(client: TestClient) -> Non
         assert isinstance(item["reason"], str) and item["reason"]
 
 
+@pytest.mark.usefixtures("app_env")
 def test_invalid_nested_body_field_is_named_by_dotted_path_without_location(
     client: TestClient,
 ) -> None:
@@ -152,6 +159,7 @@ def test_invalid_nested_body_field_is_named_by_dotted_path_without_location(
         assert isinstance(item["reason"], str) and item["reason"]
 
 
+@pytest.mark.usefixtures("app_env")
 @pytest.mark.parametrize(
     "content",
     [
@@ -217,6 +225,7 @@ def test_unhandled_exception_is_logged_with_its_stack(
 # --- TC-0.3.4 ---------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("app_env")
 def test_wrong_method_returns_method_not_allowed(client: TestClient) -> None:
     response = client.post("/test/items")
 
@@ -415,6 +424,7 @@ def test_openapi_documents_validation_failure_as_400_in_error_format(client: Tes
         assert all(isinstance(actual["detail"][0][key], str) for key in ("field", "reason"))
 
 
+@pytest.mark.usefixtures("app_env")
 def test_body_parse_failure_matches_documented_400(client: TestClient) -> None:
     # UTF-8이 아닌 본문은 FastAPI가 해석하지 못해 스스로 HTTP 예외 400을 던진다. 그 응답도
     # 같은 operation의 문서가 적은 400 스키마에 맞아야 한다. 프론트엔드는 그 문서에서 만든

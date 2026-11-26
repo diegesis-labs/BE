@@ -405,7 +405,7 @@ flowchart TD
   P -.-> BR
 ```
 
-코드는 기능별로 폴더를 나누고, 각 기능 폴더 안에서는 `router`, `service`, `repository`의 순서로만 의존합니다. 그리고 핵심 로직이 바깥 세계와 닿는 지점은 모두 포트로 추상화합니다. 따라서 `service`는 PostgreSQL이나 Google 같은 특정 기술의 이름을 알지 못하며, 실제 구현체인 어댑터는 서버가 시작될 때 주입됩니다. 이 구조의 장점은 기술을 바꿀 때 어댑터만 새로 만들면 되고, 테스트할 때에는 가짜 어댑터를 끼워 넣을 수 있다는 것입니다.
+코드는 기능별로 폴더를 나누고, 각 기능 폴더 안에서는 `router`, `service`, `repository`의 순서로만 의존합니다. 그리고 핵심 로직이 바깥 세계와 닿는 지점은 모두 포트로 추상화합니다. 따라서 `service`는 PostgreSQL이나 Google 같은 특정 기술의 이름을 알지 못하며, 실제 구현체는 바깥에서 넣어 줍니다. 이 구조의 장점은 기술을 바꿀 때 어댑터만 새로 만들면 되고, 테스트할 때에는 가짜 어댑터를 끼워 넣을 수 있다는 것입니다.
 
 
 | 포트                                     | MVP에서 쓰는 어댑터                     | 나중에 바꿀 수 있는 것          |
@@ -414,6 +414,20 @@ flowchart TD
 | `ObjectStorage` (음원 파일의 서명된 주소를 발급합니다) | 로컬 파일시스템, 배포 환경에서는 Cloudflare R2 | S3, GCS            |
 | `IdentityProvider`                     | Google                           | 다른 소셜 로그인              |
 | `BundleReader`                         | zip 묶음                           | AI 모델 서비스 호출 (2차 마일스톤) |
+| `LoginLookup` (관문이 로그인 상태를 찾습니다)     | `app/auth/repository.py`의 `AuthRepository` (PostgreSQL) | 로그인 상태 전용 저장소 |
+| `AuthStore` (로그인 `service`가 허용 목록, 사용자, 로그인 상태를 읽고 씁니다) | `app/auth/repository.py`의 `AuthRepository` (PostgreSQL) | 로그인 상태 전용 저장소 |
+
+포트(Protocol)는 모두 `app/core/ports.py`에 선언합니다. 기능 폴더의 `service`가 저장소에 기대하는 약속도 포트이며, 그 약속이 주고받는 레코드도 같은 파일에 둡니다. 공통 층(`app/core/`)은 기능 폴더와 어댑터를 import하지 않습니다. 관문처럼 공통 층이 기능 폴더의 저장소를 써야 하면 포트로 선언하고, 구현체는 `app/main.py`의 `create_app()`이 넣습니다([ADR-029](ADR.md#adr-029-공통-층과-기능-폴더의-의존-방향)).
+
+구현체를 넣는 곳은 포트의 종류에 따라 다릅니다.
+
+| 포트의 종류 | 구현체를 넣는 곳 | 예 |
+| --- | --- | --- |
+| 바깥 세계와 닿는 어댑터 | `app/main.py`의 `create_app()`이 서버가 시작될 때 넣습니다. | `IdentityProvider` |
+| 공통 층이 쓰는 저장소 포트 | `create_app()`이 요청의 데이터베이스 세션으로 구현체를 만드는 함수를 넣습니다([ADR-029](ADR.md#adr-029-공통-층과-기능-폴더의-의존-방향)). | `LoginLookup` |
+| 기능 폴더 안에서만 쓰는 저장소 포트 | 그 기능 폴더의 `router.py`가 FastAPI 의존성으로 요청의 데이터베이스 세션에서 만들어 `service`에 넘깁니다. 의존성 함수는 같은 폴더의 `repository.py`에 둡니다([ADR-033](ADR.md#adr-033-기능-폴더-안에서-쓰는-저장소-포트의-구현체를-넣는-곳)). | `AuthStore` (`get_auth_repository`) |
+
+테스트에서는 `app.dependency_overrides`로 이 구현체들을 가짜로 바꿉니다.
 
 
 폴더 구조는 다음과 같습니다.
@@ -467,7 +481,7 @@ BE/
 | 데이터베이스와 벡터 검색       | PostgreSQL, pgvector                  | [ADR-002](ADR.md#adr-002-데이터베이스와-벡터-검색)                        |
 | 데이터베이스 접근과 구조 변경 관리 | SQLAlchemy(비동기), Alembic              | [ADR-009](ADR.md#adr-009-데이터베이스-접근-도구와-개발-도구)                  |
 | 통합 테스트용 데이터베이스      | testcontainers                        | [ADR-011](ADR.md#adr-011-통합-테스트용-데이터베이스)                       |
-| 로그인                 | Google OAuth 2.0, 서버에 저장하는 로그인 상태와 쿠키 | [ADR-006](ADR.md#adr-006-로그인과-접근-제한)                           |
+| 로그인                 | Google OAuth 2.0(httpx로 직접 통신), 서버에 저장하는 로그인 상태와 쿠키 | [ADR-006](ADR.md#adr-006-로그인과-접근-제한), [ADR-028](ADR.md#adr-028-google과-통신하는-방법) |
 | 패키지 관리와 코드 품질       | uv, ruff, pyright, pytest, actionlint | [ADR-009](ADR.md#adr-009-데이터베이스-접근-도구와-개발-도구)                  |
 | 배포                  | Docker 컨테이너                           | [ADR-010](ADR.md#adr-010-배포-방식), [INFRA.md](INFRA.md)          |
 | 자동 배포와 이미지 보관       | GitHub Actions, Docker Hub            | [ADR-010](ADR.md#adr-010-배포-방식), [INFRA.md](INFRA.md#37-자동-배포) |

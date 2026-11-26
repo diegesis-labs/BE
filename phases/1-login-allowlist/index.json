@@ -1,0 +1,112 @@
+{
+  "project": "Diegesis BE",
+  "phase": "1-login-allowlist",
+  "steps": [
+    {
+      "step": 0,
+      "name": "settings",
+      "status": "completed",
+      "started_at": "2026-11-25T14:00:02+0900",
+      "summary": "설정 클래스에 frontend_url(스킴·호스트·포트만, http는 localhost/127.0.0.1만, 소문자·기본 포트 금지 검증), google_client_id, google_client_secret(SecretStr), login_session_ttl_hours(>0), login_cookie_name과 cookie_secure(https일 때 True)를 더하고, compose의 migrate·api에 세 값을 `${...:-기본값}`으로 넘기며, 테스트용 상수(tests/support/settings.py)와 app_env fixture를 만들었다",
+      "completed_at": "2026-11-25T14:12:07+0900"
+    },
+    {
+      "step": 1,
+      "name": "auth-models",
+      "status": "completed",
+      "started_at": "2026-11-25T14:12:52+0900",
+      "summary": "app/core/models.py에 제약 이름 규칙(pk_/uq_/ix_/fk_/ck_)을 단 공통 Base를, app/auth/models.py에 AllowedEmailModel·UserModel·LoginSessionModel(ARCHITECTURE 6절 그대로, 기본값은 server_default)을 두고, 리비전 8bb879ed9e41(down d98e11845e03, downgrade는 vector를 남김)을 만들고 env.py의 target_metadata를 Base.metadata로 바꿨으며, conftest에 clean_db(시작할 때 TRUNCATE, 동기·비동기 겸용)와 테스트마다 새로 만드는 db_engine·db_session_factory를 더했다. TC-1.1.1~1.1.5는 위반한 제약의 이름까지 확인하고, 모델과 마이그레이션의 비교(command.check)는 tests/core/test_database.py에 두었으며, TC-0.2.3은 '-1' 대신 vector 리비전을 기준으로 되돌리게 고쳤다. 제약 이름 규칙은 ARCHITECTURE 6절에 없는 구현 세부다",
+      "completed_at": "2026-11-25T14:25:43+0900"
+    },
+    {
+      "step": 2,
+      "name": "auth-repository",
+      "status": "completed",
+      "started_at": "2026-11-25T14:26:27+0900",
+      "summary": "app/auth/repository.py에 AllowedEmail·UserRecord·ActiveLogin 레코드와 AuthRepository(커밋하지 않음, 이메일은 받은 그대로 비교, '지금'은 DB의 now()이고 find_active_login과 delete_expired_login_sessions가 한 조건 _active()와 그 부정을 씀, find_active_login은 login_sessions⋈users⟕allowed_emails 한 번의 질의로 행을 바꾸지 않음, ORM 객체 대신 컬럼을 읽음)와 get_auth_repository를 두고, app/core/database.py에 get_db_session(정상이면 커밋, 예외면 되돌림, 첫 질의 전에는 접속하지 않음)과 DbSession(scope=\"function\"이라 커밋이 응답 전에 끝남), 앱마다 처음 쓰일 때 app.state에 만드는 엔진과 이를 닫는 database_lifespan(main.py에 조립)을 더했다. 테스트는 tests/auth/test_repository.py(TC-1.1.6 포함 12개)와 tests/core/test_database.py의 get_db_session 6개이며, 반증 조건 16가지 틀린 구현을 잠시 넣어 모두 걸러지는 것을 확인했다",
+      "completed_at": "2026-11-25T14:38:00+0900"
+    },
+    {
+      "step": 3,
+      "name": "ports-and-tokens",
+      "status": "completed",
+      "started_at": "2026-11-25T14:38:46+0900",
+      "summary": "app/core/ports.py에 Identity(sub·email·email_verified·name, 이메일은 Google이 준 그대로), LoginFailedError, IdentityProvider(authorization_url, async exchange_code) 선언만 두고, app/core/security.py에 new_token(secrets.token_urlsafe(32)를 모듈을 거쳐 부름, 부르는 쪽도 security.new_token()으로 부르라는 이유를 독스트링에 적음)·hash_token(SHA-256 hexdigest)·secure_equals(빈 값이면 False, 바이트로 바꿔 hmac.compare_digest라 ASCII가 아닌 값도 예외 없이 False)를 만들고, ruff select에 S311을 더했다. 테스트는 tests/core/test_security.py(TC-1.3.17 앞부분, app/ 아래에서 secrets·random을 import하는 파일이 security.py 하나뿐인지 AST로 확인하고 그 검출기 자체도 검증, 26개)와 tests/infra/test_ruff_config.py(임시 파일에 레포 설정으로 ruff를 실제로 돌려 S311 확인)이며, 반증 조건 10가지 틀린 구현을 잠시 넣어 모두 걸러지는 것을 확인했다",
+      "completed_at": "2026-11-25T14:45:50+0900"
+    },
+    {
+      "step": 4,
+      "name": "google-adapter",
+      "status": "completed",
+      "started_at": "2026-11-25T14:46:36+0900",
+      "summary": "httpx를 개발 의존성에서 운영 의존성으로 옮기고(uv.lock의 --no-dev 목록에도 들어감), app/adapters/google.py에 GoogleIdentityProvider(from_settings는 FRONTEND_URL+CALLBACK_PATH로 돌아올 주소를 만듦, 인가 주소는 API.md 4.2절의 매개변수 여덟 개만이고 code_challenge는 S256, 토큰 교환은 상수 TOKEN_ENDPOINT에 폼 본문 여섯 값과 10초 타임아웃·리다이렉트 안 따름, ID 토큰은 서명 없이 payload를 base64url로 풀어 iss·aud(목록이면 우리 ID 하나뿐)·azp·exp(유한한 숫자)·nonce(secure_equals)·sub·email을 모두 확인, 클라이언트 ID가 비면 어떤 aud도 맞지 않음, email_verified는 true나 \"true\"만 True)를 두었다. 실패는 모두 LoginFailedError이며 메시지에 원인만 적고, 풀기 실패는 except 밖에서 내서 본문 바이트가 __context__에 남지 않는다. 테스트는 tests/adapters/test_google.py(TC-1.2.1~1.2.8, RFC 7636 부록 B의 값으로 code_challenge 비교, 실패마다 예외 체인 전체에 code·code_verifier·비밀값·nonce·응답 본문 표식·토큰이 없는지 확인, 89개)와 tests/infra/test_dependencies.py(7개)이며, 반증 조건을 포함한 틀린 구현 26가지를 잠시 넣어 모두 걸러지는 것을 확인했다",
+      "completed_at": "2026-11-25T14:59:15+0900"
+    },
+    {
+      "step": 5,
+      "name": "auth-service",
+      "status": "completed",
+      "started_at": "2026-11-25T15:00:01+0900",
+      "summary": "app/auth/service.py에 AuthStore(Protocol, AuthRepository와 FakeAuthStore가 구조적으로 만족함을 pyright가 확인)·LoginStart·LoginSucceeded·LoginRejected(NOT_ALLOWED/LOGIN_FAILED 둘뿐, 역할은 담지 않음)와 AuthService를 두었다. start_login은 security.new_token()을 모듈을 거쳐 세 번 불러 state.nonce.code_verifier 쿠키 값과 인가 주소를 만들고, complete_login은 API.md 4.2절의 순서(error 쿼리 → state 쿠키가 정확히 세 부분 → secure_equals로 state 비교 → code 있음 → exchange_code(쿠키의 셋째를 code_verifier, 둘째를 nonce로) → email_verified → 이메일 소문자화 → 허용 목록 → 이메일과 google_sub 중 하나만 같은 행이 있으면 거부)를 따르며, 실패·거부 때에는 저장소의 쓰기를 하나도 부르지 않고 원인만 로그에 남긴다(비밀값과 error 쿼리 값은 남기지 않고 LoginFailedError의 메시지와 충돌한 user_id만 남김). 성공하면 사용자를 만들거나 이름을 갱신하고, 요청에 붙은 쿠키의 행 하나와 그 사용자의 만료된 행을 지운 뒤 hash_token한 새 쿠키 값과 지금+TTL을 저장한다(커밋은 get_db_session의 몫). logout은 쿠키가 있으면 그 해시의 행만 지운다. tests/auth/fakes.py에 FakeIdentityProvider(받은 인자 기록, identity·error를 바꿀 수 있음)와 FakeAuthStore(쓰기 기록, 소문자·고유·FK 제약 흉내, find_active_login은 아직 없음)를 두었다. 테스트는 tests/auth/test_service.py(unit 61개: TC-1.3.3~1.3.6, 1.3.12~1.3.14, 1.3.17의 service 부분, 1.3.18, 로그, import AST 검사와 그 검출기 검증)와 tests/auth/test_service_integration.py(integration 8개: TC-1.3.1, 1.3.2, 1.3.7, 1.3.10, 1.3.14, 1.3.15, 1.3.16)이며, 반증 조건을 포함한 틀린 구현 27가지를 잠시 넣어 모두 걸러지는 것을 확인했다",
+      "completed_at": "2026-11-25T15:12:24+0900"
+    },
+    {
+      "step": 6,
+      "name": "gate",
+      "status": "completed",
+      "started_at": "2026-11-25T15:13:13+0900",
+      "summary": "app/core/gate.py에 CurrentUser(id·email·display_name·role, role은 이번 요청에서 허용 목록에서 읽은 값)와 require_user·require_admin(FastAPI 의존성)을 두었다. require_user는 설정의 login_cookie_name 쿠키가 없거나 비면 데이터베이스에 닿지 않고 401 NOT_AUTHENTICATED를 내고, 있으면 repo.find_active_login(hash_token(쿠키))의 결과를 순수 함수 authorize(ActiveLogin | None)로 판정한다(None → 401, allowed None → 403 NOT_ALLOWED, session_created_at < allowed.created_at → 401, 같으면 통과). require_admin은 require_user를 거친 뒤 role이 admin이 아니면 403 ADMIN_ONLY다. 거절은 모두 AppError(한국어 메시지)이며, 관문은 행을 바꾸지 않고 허용 목록·역할을 담아 두지 않고 로그를 남기지 않는다. 테스트는 관문을 건 /api/_test/user·/api/_test/admin을 create_app()에 붙이는 tests/core/gated_app.py(두 테스트 파일이 함께 씀)와, tests/core/test_gate.py(unit 19개: TC-1.4.1, 쿠키가 비었을 때, 닿지 않는 DATABASE_URL로 쿠키 없이 401이고 쿠키가 있으면 500인 전제, 판정의 경우, 관리자 경로, 쿠키 이름이 설정을 따름, 쿠키 값이 로그에 없음)와 tests/core/test_gate_integration.py(integration 5개: TC-1.4.2~1.4.5, 1.4.9. SQL 문장마다 한 트랜잭션, 앱과 TestClient를 다시 만들지 않고 SQL로 허용 목록·역할을 바꿈, 1.4.9는 세 테이블 전체를 비교)이다. tests/auth/fakes.py의 FakeAuthStore에 find_active_login(받은 해시를 lookups에 남김)과 허용 목록·로그인 상태의 created_at 지정을 더했다. 반증 조건을 포함한 틀린 구현 14가지를 잠시 넣어 모두 걸러지는 것을 확인했다",
+      "completed_at": "2026-11-25T15:24:38+0900"
+    },
+    {
+      "step": 7,
+      "name": "origin-check",
+      "status": "completed",
+      "started_at": "2026-11-25T15:25:35+0900",
+      "summary": "app/core/origin.py에 순수 ASGI 미들웨어 OriginCheckMiddleware와 순수 함수 is_from_frontend·referer_origin을 두고 create_app()에서 add_middleware로 앱 전체에 한 번 걸었다(끄는 설정·예외 경로·허용 목록 없음). GET·HEAD·OPTIONS(대소문자 그대로 비교)와 http가 아닌 scope는 설정도 읽지 않고 통과시키고, 그 밖의 메서드는 get_settings().frontend_url과 비교한다: Origin이 있으면(null·빈 값 포함) Origin만 글자 그대로 비교, 없으면 urlsplit으로 뽑은 Referer의 scheme://netloc을 정확히 비교(읽히지 않으면 None이라 거절), 둘 다 없으면 거절. 거절은 AppError를 던지지 않고 errors.py에서 공개로 바꾼 error_response로 403 {code: ORIGIN_MISMATCH, message}를 직접 돌려주며 경로로 넘기지 않고, app.core.origin 로거에 메서드·경로·판정에 쓴 Origin이나 Referer(%r)만 WARNING으로 남긴다(쿠키는 남기지 않음). 기존 테스트는 단언을 그대로 두고 POST를 보내는 5건(tests/core/test_errors.py 4건, tests/health/test_router.py 1건)에 usefixtures(\"app_env\")를, 두 파일의 클라이언트에 기본 헤더 Origin: TEST_FRONTEND_URL을 더했다. 테스트는 tests/core/test_origin.py(unit 31개: TC-1.4.7 표 12줄을 14개로 펼침, Origin이 null·빈 값이면 Referer로 넘어가지 않음, Referer의 앞부분·포함·읽히지 않는 값·빈 값, 없는 경로의 POST가 404가 아니라 403, HEAD·OPTIONS는 경로가 불림, 설정 없이 GET /api/health 200과 GET·HEAD·OPTIONS에서 설정을 읽지 않음, 거절 로그에 메서드·경로·Origin/Referer가 있고 쿠키가 없음)이며, 반증 조건을 포함한 틀린 구현 20가지를 잠시 넣어 모두 걸러지는 것을 확인했다",
+      "completed_at": "2026-11-25T15:35:43+0900"
+    },
+    {
+      "step": 8,
+      "name": "login-routes",
+      "status": "completed",
+      "started_at": "2026-11-25T15:36:35+0900",
+      "summary": "app/auth/router.py에 GET /api/auth/google/login과 GET /api/auth/google/callback을 두고 create_app()에 등록했다. 어댑터는 import하지 않고, create_app()이 set_identity_provider_factory(app, GoogleIdentityProvider.from_settings)로 app.state에 만드는 함수를 넣어 두면 get_identity_provider가 요청마다 get_settings()로 만든다(create_app()은 설정을 읽지 않음, 어댑터를 아는 곳은 app/main.py뿐). get_auth_service는 get_auth_repository·get_identity_provider·LOGIN_SESSION_TTL_HOURS로 AuthService를 만든다. 두 경로는 302(RedirectResponse의 307이 아님)이고, Location은 FRONTEND_URL로만 만들며(/, /login?error=NOT_ALLOWED|LOGIN_FAILED), 쿼리 code·state·error는 모두 선택이라 빠져도 400이 아니라 LOGIN_FAILED다. Set-Cookie는 API.md 4.2절의 표기 그대로 직접 쓴다: diegesis_oauth_state는 HttpOnly; SameSite=Lax; Path=/api/auth/google; Max-Age=600, 로그인 상태 쿠키는 이름이 login_cookie_name이고 HttpOnly; SameSite=Lax; Path=/; Max-Age=TTL×3600, cookie_secure면 둘 다 Secure. 결과 처리는 어느 경우든 diegesis_oauth_state=; Max-Age=0; Path=/api/auth/google로 지운다. 커밋은 DbSession(scope=function)이 응답 전에 하므로 커밋이 실패하면 500이고 쿠키가 나가지 않는다. 테스트는 tests/auth/test_router.py(unit 46개: TC-1.5.1·TC-1.2.1 Host는 아무것도 덮어쓰지 않은 실제 어댑터, TC-1.3.3~1.3.6, 쿼리가 빠진 경우, TC-1.3.8, TC-1.3.9, TC-1.3.13, TC-1.3.17 뒷부분, TC-1.3.18, 쿠키 이름·TTL이 설정을 따름, next 무시, import AST 검사와 그 검출기)와 tests/auth/test_router_integration.py(integration 8개: TC-1.3.1, 1.3.2, 1.3.7, 1.3.10, 1.3.14, 1.3.16, 커밋 실패)이다. caplog.set_level(logger=)은 처리기 레벨도 바꾸므로 httpx를 먼저 WARNING으로, 전체를 나중에 DEBUG로 둔다(순서가 바뀌면 INFO·DEBUG 로그 유출이 초록이 되는 것을 틀린 구현으로 확인함). 반증 조건을 포함한 틀린 구현 27가지를 잠시 넣어 모두 걸러지는 것을 확인했다. 발견한 것: uvicorn의 접근 로그(INFO)는 쿼리를 포함한 경로를 남기므로 운영에서 결과 처리 요청의 code와 state가 로그에 남는다(E1 '못 박을 것' 위반, 이 step의 범위 밖이라 고치지 않음). API.md는 고칠 곳이 없었다",
+      "completed_at": "2026-11-25T15:52:37+0900"
+    },
+    {
+      "step": 9,
+      "name": "logout-me-routes",
+      "status": "completed",
+      "started_at": "2026-11-25T15:53:31+0900",
+      "summary": "app/auth/router.py에 POST /api/auth/logout(관문 없음, 출처 확인은 앱 전체의 미들웨어, settings.login_cookie_name 쿠키를 service.logout()에 넘겨 그 행 하나만 지움, 쿠키가 없거나 모르는 값이거나 허용 목록 밖이어도 본문 없는 204, Set-Cookie는 _set_cookie_header로 이름=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0, cookie_secure면 Secure, POST만 받아 GET은 405)와 GET /api/me(require_user, CurrentUser를 MeResponse.model_validate로 그대로 응답, 역할·이름을 담아 두지 않음)를 더하고, app/auth/schemas.py에 MeResponse(id·email·display_name·role: Literal[user, admin], from_attributes)를 두었다. tests/test_routes.py는 공개 경로를 상수 PUBLIC_ROUTES 하나에만 두고(이후 Epic이 고칠 때 그 Epic 문서에 이유를 적으라는 주석), 경로를 손으로 나열하지 않고 FastAPI가 OpenAPI 문서를 만들 때 쓰는 fastapi.routing.iter_route_contexts(app.routes)로 메서드마다 뽑는다(FastAPI 0.165는 include_router한 라우터를 app.routes에 _IncludedRouter로 감싸 두므로 app.routes를 그대로 훑으면 경로가 빠진다. 메서드·경로가 없는 것(Mount 등)을 만나면 건너뛰지 않고 TypeError, 경로 매개변수는 \"1\"로 채워 닿지 못하면 404로 보고됨). 검사는 함수 unauthenticated_failures(TC-1.5.2: 공개 경로를 뺀 모든 (메서드, 경로)를 쿠키 없이 Origin: TEST_FRONTEND_URL로 → 401 NOT_AUTHENTICATED)와 origin_check_failures(TC-1.5.4: POST·PUT·PATCH·DELETE의 모든 경로를 공개 경로까지 Origin: https://evil.example로 → 403 ORIGIN_MISMATCH)이고, 관문 없는 경로를 붙인 앱과 출처 확인 미들웨어를 뺀 앱에서 그 함수가 경로를 보고하는지, 뽑은 경로가 0이 아니고 이 Epic의 네 경로·헬스체크·PUBLIC_ROUTES를 모두 담는지도 확인한다(6개). tests/auth/test_router.py에 unit 9개(TC-1.3.12 두 경우와 lookups가 비어 관문을 거치지 않음, 붙은 쿠키의 행만 지움, 허용 목록 밖도 204, 쿠키 이름·Secure가 설정을 따름, GET 로그아웃 405, /api/me가 허용 목록의 역할과 null 이름을 응답, TC-1.5.3과 MeResponse 스키마의 네 필드), tests/auth/test_router_integration.py에 integration 5개(TC-1.3.11, TC-1.3.15, TC-1.4.3 마지막 부분, TC-1.4.6과 SQL로 역할을 바꾼 다음 요청, TC-1.4.8. 로그인 상태는 모두 결과 처리 경로를 실제로 불러 만듦)를 더했다. 반증 조건을 포함한 틀린 구현 16가지를 잠시 넣어 15가지가 걸러지는 것을 확인했다(남은 하나는 /api/me가 필드를 더 돌려주는 것인데, 반환 타입이 response_model이 되어 응답에서 걸러지므로 동작이 같다). 발견한 것: API.md 4.2절 로그아웃의 Set-Cookie 예시는 `diegesis_session=; Max-Age=0; Path=/`뿐인데, 구현은 step 지시대로 심을 때와 같은 HttpOnly·SameSite=Lax·(Secure)를 더 붙인다. 예시를 맞출지는 사람이 판단할 일이라 API.md는 고치지 않았다",
+      "completed_at": "2026-11-25T16:06:02+0900"
+    },
+    {
+      "step": 10,
+      "name": "login-check-proxy",
+      "status": "completed",
+      "started_at": "2026-11-25T16:06:58+0900",
+      "summary": "scripts/login_check.py에 프론트엔드 대역 서버 FrontendStandIn(listen_host·listen_port·backend_url, start는 ThreadingHTTPServer를 데몬 스레드에서 poll 0.05초로 돌림, stop은 shutdown·server_close·join, port는 server_port이고 뜨기 전이면 RuntimeError, backend_url은 http://호스트:포트만 받고 경로·쿼리·사용자 정보가 붙으면 ValueError)를 표준 라이브러리(http.server, http.client, threading)만으로 두었다. /api로 시작하는 경로(Vite처럼 글자 그대로 startswith)는 http.client로 메서드·경로와 쿼리·본문(Content-Length만큼)·헤더를 그대로 넘기되 Host만 백엔드의 netloc으로 바꾸고 hop-by-hop 헤더와 Connection에 적힌 헤더만 빼며(Origin·Referer·Cookie 포함 나머지는 더하거나 빼지 않음), 응답은 리디렉션을 따라가지 않고 send_response_only로 상태 코드·모든 헤더(Set-Cookie 여럿은 각각)·본문을 그대로 돌려준다(길이 없는 응답엔 Content-Length를 붙임, HEAD는 본문 없음). 요청 본문이 Transfer-Encoding이면 빈 본문으로 넘기지 않고 411, Content-Length가 숫자가 아니면 400, 백엔드에 닿지 못하면 502. 그 밖의 경로는 지금의 주소를 html.escape해 보여 주는 빈 HTML(200)이다. log_message를 막아 결과 처리의 code·state가 담긴 요청 줄을 찍지 않는다. app/을 import하지 않고 main은 없다(실행 방법은 다음 step). 테스트는 tests/infra/test_login_check.py(unit 27개: TC-1.7.1을 요청을 기록하는 가짜 백엔드로, Location이 바깥과 백엔드 자신인 두 경우에서 GET 결과 처리·POST 로그아웃·연속 요청의 Host·Origin·Referer·Cookie·메서드·경로와 쿼리·본문·헤더 전체와 302·Location·Set-Cookie 두 개·본문·요청 수를 확인, /와 /login?error=NOT_ALLOWED가 200 HTML이고 백엔드로 가지 않음, 주소 이스케이프, 502, 411, backend_url 검증, 뜨기 전 port, app import 검출기와 그 검증, check.sh와 워크플로에 login_check가 없음)이며, 반증 조건 다섯 가지를 포함한 틀린 구현 20가지를 잠시 넣어 모두 걸러지는 것을 확인했다",
+      "completed_at": "2026-11-25T16:17:39+0900"
+    },
+    {
+      "step": 11,
+      "name": "login-check-script",
+      "status": "completed",
+      "started_at": "2026-11-25T16:18:30+0900",
+      "summary": "playwright를 개발 의존성으로만 더하고(uv.lock의 운영 의존성에 없음을 test_dependencies.py가 확인), scripts/login_check.py를 완성했다: --allowed-email/--denied-email(소문자로 바꿈, 같으면 2), FRONTEND_URL·API_PORT·DB_PORT를 환경변수→레포 최상위 .env→compose 기본값 순으로 정함(compose처럼 빈 값은 기본값, FRONTEND_URL은 http://localhost나 127.0.0.1만). 브라우저를 열기 전에 /api/health 200, /api/auth/google/login의 Location에서 redirect_uri={FRONTEND_URL}/api/auth/google/callback과 client_id 비어 있지 않음, precheck(asyncpg에 default_transaction_read_only=on으로 연결하고 REPEATABLE READ READ ONLY 트랜잭션 하나에서 두 이메일의 세 테이블 행과 login_sessions 전체 수를 읽음, A가 user로 허용·A의 users 없음·B 허용 안 됨·B의 users 없음을 보고 README 꼴의 lower() SQL만 보여 줌), FRONTEND_URL 포트에 연결이 안 되는지를 보고 하나라도 어긋나면 브라우저 없이 3으로 끝남. 점검은 대역 서버를 FRONTEND_URL에 띄우고 chromium.launch(headless=False)와 점검마다 new_context()로, 로그인은 화면 이동 후 FRONTEND_URL의 /api 밖 경로로 돌아올 때까지 최대 5분(넘으면 ADR-026 재검토 조건 안내와 4), /api/me와 로그아웃은 page.evaluate의 fetch(credentials: 'include')로 부름. 쿠키는 읽는 자리(frontend_cookies)에서 바로 SHA-256으로 바꾸고 프론트엔드 호스트의 것만 담으며(repr에도 없음), 판정 judge_allowed_before_login/after_login/before_logout/after_logout, judge_denied_before_login/after_attempt는 testcase.md 두 표의 칸마다 확인해 칸 이름으로 시작하는 문장을 돌려주고, render_snapshot은 쿠키 값과 token_hash 값 없이 token_hash가 쿠키 SHA-256과 같은지만 출력함(/api 주소의 쿼리는 생략). 표와 다르면 끝에 모아 1, 같으면 0. 테스트는 tests/infra/test_login_check_precheck.py(integration 10개: TC-1.7.2의 다섯 경우와 넷 모두, 전후 세 테이블 동일, 보여 준 SQL을 실행하면 맞춰짐, 대문자 이메일, 읽기 전용 연결의 INSERT 실패, precheck가 그 연결을 씀)와 tests/infra/test_login_check_judge.py(unit 117개: 표 그대로의 여섯 시점, 반증 조건을 포함한 한 칸만 다른 상태마다 그 칸 하나만 보고, cookie-secret-marker와 그 SHA-256이 출력·판정 문장·repr에 없음, redirect_uri/client_id 확인, 설정·인자·--help, 금지어(launch_persistent_context, user_data_dir, AutomationControlled, stealth, headless=True, .fill(, .type(, .press(, keyboard, 트레이스·HAR·스크린숏, password)와 그 검출기, headless=False·new_context 있음)이며, 반증 조건을 포함한 틀린 구현 22가지를 잠시 넣어 모두 걸러지는 것을 확인했다. 실제 Google 계정으로 하는 점검(TC-1.7.3, TC-1.7.4)은 실행하지 않았다(사람이 MANUAL 점검에서 실행).",
+      "completed_at": "2026-11-25T16:40:24+0900"
+    },
+    {
+      "step": 12,
+      "name": "readme",
+      "status": "completed",
+      "started_at": "2026-11-25T16:41:17+0900",
+      "summary": "tests/infra/test_readme_allowlist.py(TC-1.6.1)는 README의 '허용 목록에 사람 넣고 빼기' 절을 제목으로 찾고(코드 블록 안의 # 줄은 제목으로 보지 않음, 그 제목이 0개나 2개면 ValueError) 그 절의 sql 블록을 옮겨 적지 않고 읽어(하나도 없으면 ValueError) 블록마다 asyncpg의 인자 없는 execute로 BEGIN·COMMIT까지 적힌 그대로 순서대로 실행한다. reader·other의 users 행과 로그인 상태를 넣고 실행한 뒤 다른 연결로 allowed_emails가 정확히 tester1·tester2(user)이고 users가 그대로이며 login_sessions에는 other의 행만 그대로 남았는지, 서버가 WARNING을 보내지 않았는지 확인하고, 경고 검출기는 트랜잭션 밖의 COMMIT으로 검증한다(integration 2개, 추출 함수의 unit 8개). 반증 조건(테이블·컬럼 이름 변경, 로그인 상태 DELETE 삭제, 제목 변경, sql 블록 삭제와 언어 표시 변경)에 ROLLBACK, COMMIT만 삭제, BEGIN만 삭제, 로그인 상태 전부 삭제, users 행 삭제, 역할 오기를 더한 12가지로 README를 잠시 바꿔 모두 빨개지는 것을 확인했다(BEGIN과 COMMIT을 함께 지우면 한 번에 보내는 실행이 암묵적 트랜잭션이 되어 잡지 못한다). README의 허용 목록 SQL은 고치지 않았다. README는 '현재 상태'(헬스체크, Google 로그인, 로그아웃, GET /api/me, 허용 목록, 책과 선곡은 없음), 허용 목록 절의 'Epic 1 전에는 동작하지 않는다' 문장 삭제, '알아 둘 것'의 .env 항목(compose는 세 값만 넘기고 .env가 없으면 Google 로그인만 안 됨, CONFIGURATION.md 2절 링크), 새 절 '로컬에서 Google 로그인 점검하기'(준비할 것, .env → compose → A를 user로 → playwright install chromium → login_check.py의 다섯 단계와 명령마다의 설명, 결과를 읽는 법과 testcase.md 표 링크, 브라우저 전 확인과 맞추는 SQL)를 고쳤고, CONFIGURATION.md 2절은 compose가 .env에서 세 값만 넘기고 DATABASE_URL 같은 나머지는 넘기지 않는 것과 그 이유(.env의 localhost 주소가 컨테이너 안의 주소를 덮어쓰면 안 됨)로 고쳤다. 확인: --help의 인자가 README와 같고, .env 없이 compose로 띄워 /api/health 200과 로그인 시작의 client_id가 빈 것, README의 psql -c 한 줄이 두 번(INSERT와 ON CONFLICT) 도는 것, login_check.py가 브라우저 없이 3으로 끝나는 것을 본 뒤 넣은 행을 지우고 docker compose down으로 내렸다. 실제 Google 계정으로 하는 점검은 실행하지 못했음, 사람이 MANUAL 점검에서 실행. ADR·DECISIONS·API는 고칠 곳이 없었다. 발견한 것: README '폴더 구조'의 scripts/ 설명에 로컬 로그인 점검 스크립트가 빠져 있다(범위 밖이라 두었다).",
+      "completed_at": "2026-11-25T16:53:52+0900"
+    }
+  ],
+  "created_at": "2026-11-25T14:00:02+0900",
+  "completed_at": "2026-11-26T09:29:09+0900"
+}

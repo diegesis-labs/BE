@@ -138,13 +138,18 @@ def _openapi_with_error_format(
     return openapi
 
 
-def _error_response(
+def error_response(
     status_code: int,
     code: str,
     message: str,
     detail: object | None = None,
     headers: Mapping[str, str] | None = None,
 ) -> JSONResponse:
+    """API.md 2.3절의 형식으로 에러 응답을 만든다.
+
+    예외 처리기 바깥에서 도는 미들웨어(app/core/origin.py)도 이 함수로 응답을 만든다. 미들웨어가
+    AppError를 던지면 처리기를 만나지 못하고 500이 되기 때문이다.
+    """
     content: dict[str, object] = {"code": code, "message": message}
     if detail is not None:
         content["detail"] = jsonable_encoder(detail)
@@ -157,13 +162,13 @@ def _error_response(
 
 async def _handle_app_error(request: Request, exc: Exception) -> JSONResponse:
     error = cast(AppError, exc)
-    return _error_response(error.status_code, error.code, error.message, error.detail)
+    return error_response(error.status_code, error.code, error.message, error.detail)
 
 
 async def _handle_validation_error(request: Request, exc: Exception) -> JSONResponse:
     errors = cast(RequestValidationError, exc).errors()
     detail = [{"field": _field_of(error), "reason": str(error["msg"])} for error in errors]
-    return _error_response(400, "VALIDATION_ERROR", _VALIDATION_ERROR_MESSAGE, detail)
+    return error_response(400, "VALIDATION_ERROR", _VALIDATION_ERROR_MESSAGE, detail)
 
 
 def _field_of(error: Mapping[str, Any]) -> str:
@@ -197,13 +202,13 @@ async def _handle_http_exception(request: Request, exc: Exception) -> Response:
             # 499처럼 HTTP 표준에 이름이 없는 상태는 code를 정할 수 없다. 던진 코드의 잘못이므로
             # 예상하지 못한 문제로 응답하고, 무엇을 던졌는지 로그에 남긴다.
             _log_server_error("이름이 없는 HTTP 상태의 예외", request, error)
-            return _error_response(500, "INTERNAL_ERROR", _INTERNAL_ERROR_MESSAGE)
+            return error_response(500, "INTERNAL_ERROR", _INTERNAL_ERROR_MESSAGE)
     if status_code >= 500:
         # 응답만으로는 처리되지 않은 예외와 구별되지 않으므로, 원인을 서버 로그에 남긴다.
         _log_server_error("서버 오류로 응답한 HTTP 예외", request, error)
     # 예외의 detail은 응답에 담지 않는다. 영어 원문("Not Found")이거나
     # 던진 쪽의 내부 사정일 수 있다. 405의 Allow처럼 예외가 함께 실은 헤더는 그대로 보낸다.
-    return _error_response(status_code, code, message, headers=error.headers)
+    return error_response(status_code, code, message, headers=error.headers)
 
 
 def _log_server_error(what: str, request: Request, error: StarletteHTTPException) -> None:
@@ -225,4 +230,4 @@ async def _handle_unhandled_exception(request: Request, exc: Exception) -> JSONR
     # 데이터베이스 주소 같은 내부 정보가 새면 안 되기 때문이다(docs/ARCHITECTURE.md 1절).
     # 예외는 서버 로그에만 스택과 함께 남긴다.
     logger.exception("처리되지 않은 예외: %s %s", request.method, request.url.path, exc_info=exc)
-    return _error_response(500, "INTERNAL_ERROR", _INTERNAL_ERROR_MESSAGE)
+    return error_response(500, "INTERNAL_ERROR", _INTERNAL_ERROR_MESSAGE)
