@@ -88,19 +88,127 @@ B에게는 로그인 상태가 생기지 않으므로 로그아웃 전후는 보
 
 ## 실제 Google 계정으로 하는 로그인과 로그아웃
 
-- [ ] 점검 1(TC-1.7.3): 계정 A로 로그인하고 로그아웃했을 때, 스크립트가 출력한 네 시점(로그인 전, 로그인 후, 로그아웃 전, 로그아웃 후)의 테이블과 브라우저의 상태가 위 "점검 1"의 표와 칸마다 같다.
+- [x] 점검 1(TC-1.7.3): 계정 A로 로그인하고 로그아웃했을 때, 스크립트가 출력한 네 시점(로그인 전, 로그인 후, 로그아웃 전, 로그아웃 후)의 테이블과 브라우저의 상태가 위 "점검 1"의 표와 칸마다 같다.
   - 테스트로 덮을 수 없는 이유: 실제 Google 계정과 Google 화면의 입력은 사람만 다룰 수 있고, 검사의 테스트는 실제 Google에 요청하지 않는다(ADR-026, ADR-031).
   - 실행 명령: `uv run python scripts/login_check.py --allowed-email <A> --denied-email <B>`
   - 관찰한 값(체크한 날짜와 함께 적는다. 이메일, 쿠키 값, `token_hash`의 값은 적지 않는다):
+    - 체크한 날짜: 2026-11-26
+    - 가린 값: 스크립트의 출력을 옮기면서 아래 값을 바꿔 적었다. 이메일은 `<A>`와 `<B>`로 바꿨다. 계정 A의 `users.id`는 `<id-A>`로 바꿨으며, `users.id`, `login_sessions.user_id`, `GET /api/me`의 `id`는 모두 같은 값이었다. `google_sub`는 `<google_sub-A>`로 바꿨으며, 비어 있지 않은 21자리 숫자였다. `display_name`은 `<A의 Google 이름>`으로 바꿨다.
     - 로그인 전:
+      ```text
+      === 점검 1 · 로그인 전
+      allowed_emails
+        A <A>: <A> role=user created_at=2026-11-25T13:47:21+00:00
+        B <B>: 행 없음
+      users
+        A <A>: 행 없음
+        B <B>: 행 없음
+      login_sessions (전체 0행)
+        A <A>: 행 없음
+        B <B>: 행 없음
+      브라우저
+        주소: http://localhost:5173/login?error=LOGIN_FAILED
+        쿠키: 없음
+        보낸 쿠키(GET /api/me): 없음
+        GET /api/me: 401 {"code": "NOT_AUTHENTICATED", "message": "로그인이 필요합니다."}
+      ```
     - 로그인 후:
+      ```text
+      === 점검 1 · 로그인 후
+      allowed_emails
+        A <A>: <A> role=user created_at=2026-11-25T13:47:21+00:00
+        B <B>: 행 없음
+      users
+        A <A>: <A> id=<id-A> google_sub=<google_sub-A> display_name='<A의 Google 이름>' created_at=2026-11-26T00:07:07+00:00
+        B <B>: 행 없음
+      login_sessions (전체 1행)
+        A <A> user_id=<id-A> created_at=2026-11-26T00:07:07+00:00 expires_at=2026-12-10T00:07:07+00:00, token_hash는 diegesis_session 쿠키 값의 SHA-256과 같다
+        B <B>: 행 없음
+      브라우저
+        주소: http://localhost:5173/
+        쿠키:
+          diegesis_session: Path=/, SameSite=Lax, HttpOnly, Secure 없음
+        보낸 쿠키(GET /): diegesis_session
+      ```
     - 로그아웃 전:
+      ```text
+      === 점검 1 · 로그아웃 전
+      allowed_emails
+        A <A>: <A> role=user created_at=2026-11-25T13:47:21+00:00
+        B <B>: 행 없음
+      users
+        A <A>: <A> id=<id-A> google_sub=<google_sub-A> display_name='<A의 Google 이름>' created_at=2026-11-26T00:07:07+00:00
+        B <B>: 행 없음
+      login_sessions (전체 1행)
+        A <A> user_id=<id-A> created_at=2026-11-26T00:07:07+00:00 expires_at=2026-12-10T00:07:07+00:00, token_hash는 diegesis_session 쿠키 값의 SHA-256과 같다
+        B <B>: 행 없음
+      브라우저
+        주소: http://localhost:5173/
+        쿠키:
+          diegesis_session: Path=/, SameSite=Lax, HttpOnly, Secure 없음
+        보낸 쿠키(GET /api/me): diegesis_session
+        GET /api/me: 200 {"id": "<id-A>", "email": "<A>", "display_name": "<A의 Google 이름>", "role": "user"}
+      ```
     - 로그아웃 후:
-    - 표와 다른 점(없으면 "없음"):
-- [ ] 점검 2(TC-1.7.4): 계정 B로 로그인을 시도했을 때, 스크립트가 출력한 두 시점(로그인 전, 로그인 시도 후)의 테이블과 브라우저의 상태가 위 "점검 2"의 표와 칸마다 같다.
+      ```text
+      === 점검 1 · 로그아웃 후
+      allowed_emails
+        A <A>: <A> role=user created_at=2026-11-25T13:47:21+00:00
+        B <B>: 행 없음
+      users
+        A <A>: <A> id=<id-A> google_sub=<google_sub-A> display_name='<A의 Google 이름>' created_at=2026-11-26T00:07:07+00:00
+        B <B>: 행 없음
+      login_sessions (전체 0행)
+        A <A>: 행 없음
+        B <B>: 행 없음
+      브라우저
+        주소: http://localhost:5173/
+        쿠키: 없음
+        보낸 쿠키(GET /api/me): 없음
+        GET /api/me: 401 {"code": "NOT_AUTHENTICATED", "message": "로그인이 필요합니다."}
+        POST /api/auth/logout: 204
+      ```
+    - `display_name`: 로그인 후의 `users`와 로그아웃 전의 `GET /api/me`에서 모두 계정 A의 Google 이름과 같았다.
+    - 표와 다른 점(없으면 "없음"): 없음
+- [x] 점검 2(TC-1.7.4): 계정 B로 로그인을 시도했을 때, 스크립트가 출력한 두 시점(로그인 전, 로그인 시도 후)의 테이블과 브라우저의 상태가 위 "점검 2"의 표와 칸마다 같다.
   - 테스트로 덮을 수 없는 이유: 위와 같다. 허용 목록 밖의 실제 Google 계정이 Google 로그인을 마치고 돌아오는 경로는 실제 계정으로만 지나간다.
   - 실행 명령: 점검 1과 같은 실행에서 이어진다.
   - 관찰한 값(체크한 날짜와 함께 적는다):
+    - 체크한 날짜: 2026-11-26. 점검 1과 같은 실행이며, 가린 값도 점검 1과 같다.
     - 로그인 전(`login_sessions`의 전체 행 수 포함):
+      ```text
+      === 점검 2 · 로그인 전
+      allowed_emails
+        A <A>: <A> role=user created_at=2026-11-25T13:47:21+00:00
+        B <B>: 행 없음
+      users
+        A <A>: <A> id=<id-A> google_sub=<google_sub-A> display_name='<A의 Google 이름>' created_at=2026-11-26T00:07:07+00:00
+        B <B>: 행 없음
+      login_sessions (전체 0행)
+        A <A>: 행 없음
+        B <B>: 행 없음
+      브라우저
+        주소: http://localhost:5173/
+        쿠키: 없음
+        보낸 쿠키(GET /api/me): 없음
+        GET /api/me: 401 {"code": "NOT_AUTHENTICATED", "message": "로그인이 필요합니다."}
+      ```
     - 로그인 시도 후:
-    - 표와 다른 점(없으면 "없음"):
+      ```text
+      === 점검 2 · 로그인 시도 후
+      allowed_emails
+        A <A>: <A> role=user created_at=2026-11-25T13:47:21+00:00
+        B <B>: 행 없음
+      users
+        A <A>: <A> id=<id-A> google_sub=<google_sub-A> display_name='<A의 Google 이름>' created_at=2026-11-26T00:07:07+00:00
+        B <B>: 행 없음
+      login_sessions (전체 0행)
+        A <A>: 행 없음
+        B <B>: 행 없음
+      브라우저
+        주소: http://localhost:5173/login?error=NOT_ALLOWED
+        쿠키: 없음
+        보낸 쿠키(GET /api/me): 없음
+        GET /api/me: 401 {"code": "NOT_AUTHENTICATED", "message": "로그인이 필요합니다."}
+      ```
+    - 표와 다른 점(없으면 "없음"): 없음
