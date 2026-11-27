@@ -1,14 +1,21 @@
 #!/usr/bin/env bash
 # harness-worktree.sh — phase 하나를 돌릴 worktree를 Orca로 만들고 그 경로를 찍는다.
 #
-#   사용법: scripts/harness-worktree.sh {task} [--base <ref>]
+#   사용법: scripts/harness-worktree.sh {task} [--base <ref>] [--handoff]
 #
 #   {task}는 phases/ 아래 폴더 이름이다 (예: 0-project-setup). 브랜치는 feat-{task}가 된다 —
 #   execute.py가 기대하는 이름이라 바꾸면 execute.py가 다른 브랜치를 새로 딴다.
 #   --base — worktree를 딸 기준점. 생략하면 main이다.
+#   --handoff — worktree를 준비한 뒤 그 worktree에 새 Orca 탭을 열고, 이 명령을 부른 Claude
+#     세션의 대화를 거기서 이어받게 한다(claude --resume <세션> --fork-session). Orca는 대화
+#     탭을 그것을 처음 연 worktree에 묶어 둔다. 그래서 EnterWorktree로 cwd만 옮기면 탭은
+#     원래 worktree에 남고, 대화와 변경사항을 한 화면에서 볼 수 없다. 원래 탭은 닫지 않는다 —
+#     응답 중인 턴이 끊기고, 새 탭이 뜨지 않았을 때 돌아갈 곳이 없어지기 때문이다. 사람이 닫는다.
 #
 #   표준 출력의 마지막 줄은 worktree의 절대 경로 하나뿐이다. 안내는 전부 표준 오류로 나간다.
 #   그래서 `cd "$(scripts/harness-worktree.sh 0-project-setup)"`처럼 쓸 수 있다.
+#
+#   테스트: bash scripts/harness-worktree.test.sh
 #
 # worktree를 `git worktree add`로 만들지 않는다. Orca 왼쪽 사이드패널에는 Orca가 만든
 # worktree만 보인다. Orca에 닿지 않으면 대신 만들지 않고 실패로 끝낸다 — 보이지 않는
@@ -54,19 +61,87 @@ prepare_env() { # prepare_env <worktree 경로>
   (cd "$1" && uv sync --locked >&2) || die "uv sync가 실패했다: $1"
 }
 
+# 작은따옴표로 감싸 찍는다. 터미널에 그대로 쳐 넣을 명령을 만들 때 쓴다. 사람의 로그인 셸은
+# zsh이고 테스트는 bash로 돌리므로, 두 셸이 같게 읽는 POSIX 작은따옴표만 쓴다.
+sq() { # sq <문자열>
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+# claude 프로세스의 인자 가운데 새 탭에서도 같아야 하는 것만 골라 공백으로 이어 찍는다.
+# ps는 따옴표를 잃어서 공백 든 값(--plugin-dir의 경로 같은 것)이 쪼개져 나온다. 그래서 값에
+# 공백이 없는 플래그만 허용 목록으로 옮기고, 나머지 낱말은 모두 버린다.
+carry_flags() { # carry_flags <claude 프로세스의 인자 문자열>
+  local out="" pending="" word
+  set -f
+  for word in $1; do
+    if [ -n "$pending" ]; then
+      out="$out $pending $word"
+      pending=""
+      continue
+    fi
+    case "$word" in
+      --dangerously-skip-permissions | --allow-dangerously-skip-permissions) out="$out $word" ;;
+      --permission-mode=* | --model=* | --effort=*) out="$out $word" ;;
+      --permission-mode | --model | --effort) pending="$word" ;;
+    esac
+  done
+  set +f
+  printf '%s\n' "${out# }"
+}
+
+# 새 탭에서 칠 명령을 한 줄로 만든다. 원래 세션은 이 스크립트를 부른 턴을 마칠 때까지 살아
+# 있으므로, 두 프로세스가 한 트랜스크립트에 쓰지 않도록 --fork-session으로 갈라서 이어받는다.
+handoff_command() { # handoff_command <세션 ID> <worktree 경로> <브랜치> [옮길 플래그...]
+  local session="$1" wt="$2" branch="$3" cmd flag prompt
+  shift 3
+  prompt="이 대화를 worktree $wt (브랜치 $branch)의 새 Orca 탭으로 옮겨 왔다. 이제부터 파일은 모두 이 worktree 안에서 쓰고 커밋한다. pwd와 git branch --show-current로 위치를 확인해 한 줄로 보고하고, 사람의 다음 지시를 기다려라."
+  cmd="claude --resume $(sq "$session") --fork-session"
+  for flag in "$@"; do
+    cmd="$cmd $(sq "$flag")"
+  done
+  printf '%s\n' "$cmd $(sq "$prompt")"
+}
+
+# 이 스크립트를 부른 Claude 세션의 대화를 worktree의 새 Orca 탭으로 옮긴다.
+# CLAUDE_CODE_SESSION_ID와 CLAUDE_PID는 Claude Code가 Bash 도구에 넣는 값이다.
+handoff() { # handoff <worktree 경로> <task> <브랜치>
+  local wt="$1" task="$2" branch="$3" flags="" cmd out
+  [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] ||
+    die "--handoff는 대화형 Claude 세션 안에서만 쓸 수 있다(CLAUDE_CODE_SESSION_ID가 없다). worktree는 준비됐다: $wt"
+  if [ -n "${CLAUDE_PID:-}" ]; then
+    flags="$(carry_flags "$(ps -o args= -p "$CLAUDE_PID" 2>/dev/null)")"
+  else
+    say "CLAUDE_PID가 없어 권한 모드와 모델을 옮기지 않는다. 새 탭은 기본 설정으로 뜬다."
+  fi
+  # $flags는 공백 없는 낱말들이라 일부러 쪼개서 넘긴다.
+  # shellcheck disable=SC2086
+  cmd="$(handoff_command "$CLAUDE_CODE_SESSION_ID" "$wt" "$branch" $flags)"
+  out="$(orca terminal create --worktree "path:$wt" --title "$task" --command "$cmd" --focus --json 2>&1)" ||
+    die "worktree는 준비됐지만 새 탭을 열지 못했다: $wt
+$out
+Orca에서 그 worktree를 열고 아래를 직접 실행해라.
+  cd $(sq "$wt") && $cmd"
+  say "대화를 '$task' worktree의 새 탭으로 옮겼다. 이 탭의 세션에서는 더 작업하지 말고 닫아라."
+}
+
 # 테스트가 함수만 가져갈 때는 여기서 멈춘다.
 [ -n "${HARNESS_WORKTREE_LIB:-}" ] && return 0
 
 task="${1:-}"
 if [ -z "$task" ] || [ "${task#-}" != "$task" ]; then
-  echo "usage: scripts/harness-worktree.sh {task} [--base <ref>]" >&2
+  echo "usage: scripts/harness-worktree.sh {task} [--base <ref>] [--handoff]" >&2
   exit 64
 fi
 shift
 
 base="main"
+do_handoff=""
 while [ $# -gt 0 ]; do
   case "$1" in
+    --handoff)
+      do_handoff=1
+      shift
+      ;;
     --base)
       base="${2:-}"
       [ -n "$base" ] || {
@@ -102,6 +177,7 @@ if [ -n "$existing" ]; then
     say "주의: 이 worktree는 Orca가 관리하지 않아 사이드패널에 보이지 않을 수 있다."
   fi
   prepare_env "$existing"
+  if [ -n "$do_handoff" ]; then handoff "$existing" "$task" "$branch"; fi
   echo "$existing"
   exit 0
 fi
@@ -132,4 +208,5 @@ fi
 
 prepare_env "$path"
 say "준비됐다. Orca 사이드패널에서 '$task'로 보인다."
+if [ -n "$do_handoff" ]; then handoff "$path" "$task" "$branch"; fi
 echo "$path"

@@ -50,12 +50,16 @@
 작업은 메인 체크아웃이 아니라 phase마다 따로 만든 worktree에서 한다. 파일을 만들기 전에 worktree부터 만든다.
 
 ```bash
-scripts/harness-worktree.sh {task-name}    # 표준 출력의 마지막 줄이 worktree 경로다
+scripts/harness-worktree.sh {task-name} --handoff    # 표준 출력의 마지막 줄이 worktree 경로다
 ```
 
 이 스크립트는 Orca로 `feat-{task-name}` 브랜치의 worktree를 만든다. 그래야 Orca 왼쪽 사이드패널에 보인다. `git worktree add`로 직접 만들지 마라. 이유: Orca가 만들지 않은 worktree는 사이드패널에 보이지 않아, 무인 실행이 어디서 도는지 사람이 볼 수 없다.
 
-이후의 파일(Epic 문서, `phases/` 아래 전부, 가드 예외)은 **그 worktree 안에** 쓰고 그 안에서 커밋한다. 그래야 설계와 구현이 한 PR에 담긴다. `scripts/harness-run.sh`는 메인 체크아웃에서 부르면 실행을 거부한다.
+`--handoff`는 그 worktree에 새 Orca 탭을 열고, 이 대화를 거기서 이어받게 한다(`claude --resume <세션> --fork-session`). 권한 모드와 모델도 이 세션과 같게 옮긴다. EnterWorktree로 대신하지 마라. 이유: Orca는 대화 탭을 처음 연 worktree에 묶어 두므로, cwd만 바뀌고 탭은 메인 worktree에 남는다. 그러면 사람이 대화와 변경사항을 한 화면에서 볼 수 없다.
+
+스크립트가 성공하면 이 세션의 일은 끝난다. 새 탭의 worktree 경로와 브랜치를 한 줄로 보고하고, 이 탭은 닫아도 된다고 알린 뒤 턴을 끝낸다. 이 세션에서는 더 이상 파일을 쓰지 마라. 이유: 여기서 쓴 파일은 phase 브랜치에 담기지 않고, fork된 두 세션의 작업이 갈라진다. 새 탭을 열지 못해 실패하면 표준 오류에 찍힌 명령을 사람에게 그대로 전한다. 그 경우에도 worktree는 이미 준비돼 있다.
+
+이후의 파일(Epic 문서, `phases/` 아래 전부, 가드 예외)은 새 탭에서 이어받은 세션이 **그 worktree 안에** 쓰고 그 안에서 커밋한다. 그래야 설계와 구현이 한 PR에 담긴다. `scripts/harness-run.sh`는 메인 체크아웃에서 부르면 실행을 거부한다.
 
 #### D-1. `phases/index.json` (전체 현황)
 

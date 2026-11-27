@@ -36,7 +36,7 @@ flowchart TD
 
 | 단계 | 하는 일 | 남는 것 |
 | --- | --- | --- |
-| 1. worktree | Orca로 `feat-<phase 이름>` 브랜치의 worktree를 만듭니다. 이후의 모든 일은 이 worktree 안에서 합니다. | Orca 사이드패널의 항목 |
+| 1. worktree | Orca로 `feat-<phase 이름>` 브랜치의 worktree를 만들고, 설계하던 대화도 그 worktree의 새 탭으로 옮깁니다. 이후의 모든 일은 이 worktree 안에서 합니다. | Orca 사이드패널의 항목 |
 | 2. Epic 문서 | 이번 작업의 목표, Story, 테스트 케이스를 씁니다. | `docs/backlog/epic-N/` |
 | 3. step 설계 | Epic을 서로 독립적으로 실행할 수 있는 step으로 나눕니다. step마다 실행할 수 있는 완료 조건과 반증 조건을 적습니다. | `phases/<phase 이름>/` |
 | 4. step 실행 | step마다 새 에이전트 세션을 헤드리스로 띄워 구현하게 합니다. 실패하면 세 번까지 다시 시도하고, step이 끝날 때마다 커밋합니다. | step별 커밋 |
@@ -61,15 +61,16 @@ flowchart TD
 
 ### 2.2 설계
 
-1. worktree를 만듭니다. 출력의 마지막 줄이 worktree의 경로입니다.
+1. 메인 체크아웃에서 Claude Code를 실행하고 `/harness`를 실행합니다. 에이전트와 함께 문서를 읽고, 이번 Epic에서 정할 것을 논의합니다.
+2. 파일을 쓰기 전에 에이전트가 worktree를 만들고, 대화를 그 worktree로 옮깁니다.
 
    ```bash
-   scripts/harness-worktree.sh 3-books
+   scripts/harness-worktree.sh 3-books --handoff
    ```
 
-2. Orca 사이드패널에서 그 worktree를 열고, 그 안에서 Claude Code를 실행합니다.
-3. Epic 문서와 테스트 케이스를 씁니다. 형식은 [backlog/README.md](backlog/README.md)에 있습니다. 대응하는 GitHub 이슈의 번호를 문서 머리에 적습니다.
-4. `/harness`를 실행해서 step을 설계합니다. 에이전트가 초안을 내면 사람이 검토하고 고칩니다. step 파일은 무인 실행 전에 사람이 손댈 수 있는 마지막 자리이므로, 반증 조건과 금지사항을 여기서 확정합니다.
+   이 명령은 worktree를 만든 뒤 그 worktree에 새 Orca 탭을 열고, 지금까지의 대화를 그 탭에서 이어받게 합니다. 그래서 대화와 그 worktree의 변경사항이 한 화면에 함께 보입니다. 새 탭이 뜨면 원래 탭은 닫습니다. 사람이 일반 터미널에서 worktree만 만들 때에는 `--handoff`를 빼고 실행하며, 출력의 마지막 줄이 worktree의 경로입니다.
+3. 새 탭에서 Epic 문서와 테스트 케이스를 씁니다. 형식은 [backlog/README.md](backlog/README.md)에 있습니다. 대응하는 GitHub 이슈의 번호를 문서 머리에 적습니다.
+4. step을 설계합니다. 에이전트가 초안을 내면 사람이 검토하고 고칩니다. step 파일은 무인 실행 전에 사람이 손댈 수 있는 마지막 자리이므로, 반증 조건과 금지사항을 여기서 확정합니다.
 5. Epic 문서와 `phases/` 아래의 파일을 커밋합니다.
 
 ### 2.3 실행
@@ -178,7 +179,7 @@ HARNESS_MODEL=claude-sonnet-5-5 scripts/harness-run.sh 3-books
 | --- | --- |
 | `claude` | 에이전트 세션을 띄웁니다. |
 | `uv` | 검사 명령을 실행합니다. |
-| `orca` | worktree를 만듭니다. Orca가 만들지 않은 worktree는 사이드패널에 보이지 않으므로, `git worktree add`로 대신하지 않습니다. |
+| `orca` | worktree를 만들고, 설계하던 대화를 그 worktree의 새 탭으로 옮깁니다. Orca가 만들지 않은 worktree는 사이드패널에 보이지 않으므로, `git worktree add`로 대신하지 않습니다. |
 | `gh` | PR을 엽니다. |
 | `docker` | 통합 테스트의 데이터베이스와 compose 스모크를 띄웁니다. |
 | `jq` 또는 `python3` | 가드가 입력을 읽습니다. 둘 다 없으면 가드가 아무것도 막지 않습니다. |
@@ -190,6 +191,7 @@ HARNESS_MODEL=claude-sonnet-5-5 scripts/harness-run.sh 3-books
 - **무인 실행은 권한 확인 없이 돕니다.** 헤드리스 에이전트 세션은 `--dangerously-skip-permissions`로 실행되므로, 사람에게 묻지 않고 명령을 실행합니다. 되돌릴 수 없는 명령을 막는 것은 명령 가드뿐입니다. 그래서 무인 실행은 비밀값이나 운영 환경의 자격 증명이 없는 환경에서 돌립니다.
 - **종료 검사는 세 번까지만 되돌립니다.** 그 뒤에는 검사가 실패한 채로 에이전트 세션이 끝날 수 있고, 그 상태로 step이 완료로 기록될 수 있습니다. 이 경우는 리뷰의 실측이 잡아냅니다.
 - **명령 가드는 명령의 글자를 봅니다.** 그래서 막아야 할 문구가 들어 있는 검색 명령이나 커밋 메시지도 함께 막습니다.
+- **대화를 옮기는 일은 공식 문서에 없는 값에 기댑니다.** `scripts/harness-worktree.sh --handoff`는 Claude Code가 Bash 도구에 넣는 `CLAUDE_CODE_SESSION_ID`와 `CLAUDE_PID`로 대화와 실행 옵션을 찾습니다. 두 값은 Claude Code의 공식 문서에 없어서, Claude Code가 바뀌면 동작하지 않을 수 있습니다. 그리고 대화를 옮긴 뒤 원래 탭은 사람이 닫아야 합니다.
 - **처분도 스스로 채점합니다.** 고친 에이전트 세션이 "고쳤다"와 "기각했다"를 스스로 적습니다. critical이나 major가 있던 라운드는 다음 리뷰가 그 기록을 다시 판정하지만, minor만 있던 라운드는 다시 리뷰하지 않습니다. PR을 검토할 때 처분 기록의 기각 항목을 함께 봐 주세요.
 
 ## 6. 세부 규정이 있는 곳
